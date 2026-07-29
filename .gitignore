@@ -1,0 +1,10 @@
+*.log
+.env
+.env.*
+*.tmp
+*.bak
+.vscode/
+.idea/
+coverage/
+dist/
+build/

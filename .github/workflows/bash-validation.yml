@@ -1,0 +1,23 @@
+name: Bash Validation
+
+on:
+  push:
+    branches: [ main ]
+
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  validate:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - uses: actions/checkout@v4
+
+      - name: Check Bash Syntax
+
+        run: |
+
+          find scripts -name "*.sh" -exec bash -n {} \;
