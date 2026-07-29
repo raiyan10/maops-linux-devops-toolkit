@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
-set -euo pipefail
 
-source "../common/logger.sh"
-source "../common/helpers.sh"
-source "../common/colors.sh"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../common/bootstrap.sh"
 
 main() {
-  info "Checking disk usage"
-  df -h
+
+    require_linux
+
+    show_header "Disk Usage Report"
+
+    log_info "Collecting disk usage..."
+
+    df -h
+
+    log_success "Disk usage report completed."
 }
 
 main "$@"
