@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-source "$SCRIPT_DIR/colors.sh"
+[[ -n "${MAOPS_LOGGER_LOADED:-}" ]] && return
+readonly MAOPS_LOGGER_LOADED=1
 
 timestamp() {
     date +"%Y-%m-%d %H:%M:%S"

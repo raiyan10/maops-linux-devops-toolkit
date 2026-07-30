@@ -2,10 +2,12 @@
 
 > A production-inspired Linux automation toolkit for DevOps, Platform Engineering and Cloud Operations.
 
-![Linux](https://img.shields.io/badge/Linux-Ubuntu-orange)
-![Bash](https://img.shields.io/badge/Bash-5.x-green)
+![Linux](https://img.shields.io/badge/Linux-Ubuntu-E95420?logo=ubuntu&logoColor=white)
+![Bash](https://img.shields.io/badge/Bash-5.x-4EAA25?logo=gnubash&logoColor=white)
+[![Bash Validation](https://github.com/raiyan10/maops-linux-devops-toolkit/actions/workflows/bash-validation.yml/badge.svg)](https://github.com/raiyan10/maops-linux-devops-toolkit/actions/workflows/bash-validation.yml)
+![ShellCheck](https://img.shields.io/badge/ShellCheck-enabled-4E9A06)
 ![GitHub Actions](https://img.shields.io/badge/CI-GitHub%20Actions-blue)
-![License](https://img.shields.io/badge/License-MIT-yellow)
+![License](https://img.shields.io/badge/License-MIT-blue)
 
 ---
 
@@ -50,54 +52,99 @@ This repository is part of the **MAOps Technologies Engineering Portfolio**.
 ```text
 .
 ├── .claude
+│   ├── CLAUDE.md
+│   ├── settings.local.json
+│   └── skills
+│       ├── bash-review
+│       ├── devops-review
+│       ├── documentation
+│       ├── github-actions
+│       ├── linux-best-practices
+│       └── new-bash-tool
 ├── .github
-├── diagrams
+│   └── workflows
+│       └── bash-validation.yml
 ├── docs
+│   ├── architecture.md
+│   ├── best-practices.md
+│   ├── engineering-reviews
+│   │   └── day-02.md
+│   ├── images
+│   │   └── day-02
+│   ├── roadmap.md
+│   └── troubleshooting.md
 ├── scripts
 │   ├── common
+│   │   ├── bootstrap.sh
+│   │   ├── colors.sh
+│   │   ├── config.sh
+│   │   ├── helpers.sh
+│   │   ├── logger.sh
+│   │   └── output.sh
 │   ├── filesystem
+│   │   ├── cleanup-temp.sh
+│   │   ├── disk-usage.sh
+│   │   └── largest-files.sh
 │   ├── monitoring
-│   ├── network
-│   ├── system
-│   └── users
-├── src
-├── tests
-├── README.md
-└── Makefile
+│   │   ├── cpu-monitor.sh
+│   │   ├── load-average.sh
+│   │   └── memory-report.sh
+│   └── system
+│       ├── hostname-report.sh
+│       ├── os-details.sh
+│       └── system-info.sh
+├── templates
+│   ├── github-workflow-template.yml
+│   ├── readme-template.md
+│   ├── script-template.sh
+│   └── skill-template.md
+├── .gitattributes
+├── .gitignore
+├── CHANGELOG.md
+├── CONTRIBUTING.md
+├── LICENSE
+├── Makefile
+└── README.md
 ```
+
+`scripts/network` and `scripts/users` are planned modules and do not exist in the tree yet — see [Utilities](#utilities) below.
 
 ---
 
-# Planned Utilities
+# Utilities
 
-## System
+## Implemented
 
-- System Information
-- OS Details
-- Hostname Report
+### System (`scripts/system`)
 
-## Filesystem
+- [x] System Information — `system-info.sh`
+- [x] OS Details — `os-details.sh`
+- [x] Hostname Report — `hostname-report.sh`
 
-- Disk Usage
-- Largest Files
-- Temporary File Cleanup
+### Monitoring (`scripts/monitoring`)
 
-## Monitoring
+- [x] CPU Monitor — `cpu-monitor.sh`
+- [x] Memory Report — `memory-report.sh`
+- [x] Load Average — `load-average.sh`
 
-- CPU Monitor
-- Memory Report
-- Load Average
+### Filesystem (`scripts/filesystem`)
 
-## Network
+- [x] Disk Usage — `disk-usage.sh`
+- [x] Largest Files — `largest-files.sh`
+- [x] Temporary File Cleanup (dry-run scanner, no deletion) — `cleanup-temp.sh`
 
-- Network Information
-- Ping Checker
-- Port Checker
+## Planned
 
-## Users
+### Network (`scripts/network`, not yet created)
 
-- User Report
-- Last Login Report
+- [ ] Network Information
+- [ ] Ping Checker
+- [ ] Port Checker
+
+### Users (`scripts/users`, not yet created)
+
+- [ ] User Report
+- [ ] Last Login Report
 
 ---
 
@@ -128,20 +175,27 @@ This project follows:
 
 # Roadmap
 
-- [x] Common Utility Library
-- [x] Logging Framework
-- [x] Output Framework
-- [x] System Utilities
-- [x] Monitoring Utilities (Initial)
-- [ ] Configuration Framework
-- [ ] Filesystem Utilities
-- [ ] Network Utilities
-- [ ] User Management Utilities
-- [ ] Automated Testing
-- [ ] GitHub Actions CI
-- [ ] ShellCheck Integration
-- [ ] Documentation
-- [ ] Medium Technical Article
+- [x] Common utility library
+- [x] Logging framework
+- [x] Output framework
+- [x] System utilities
+- [x] Initial monitoring utilities
+- [x] Initial filesystem utilities
+- [x] Bash syntax validation
+- [x] ShellCheck integration
+- [x] GitHub Actions CI
+- [x] Claude Code project guidance
+- [x] Claude Code Skills
+- [x] Git executable-mode and SIGPIPE release-blocker fixes (Engineering Review Day 2)
+- [ ] Unified `maops` CLI
+- [ ] Network utilities
+- [ ] User and process utilities
+- [ ] Bats automated tests
+- [ ] Installation and packaging
+- [ ] Architecture diagrams
+- [ ] Medium technical article
+
+See [docs/roadmap.md](docs/roadmap.md) for the detailed, module-level roadmap.
 
 ---
 

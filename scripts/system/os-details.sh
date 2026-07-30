@@ -4,6 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# shellcheck source=scripts/common/bootstrap.sh
 source "$SCRIPT_DIR/../common/bootstrap.sh"
 
 main() {
@@ -22,6 +23,7 @@ main() {
 
     if [[ -f /etc/os-release ]]; then
 
+        # shellcheck source=/dev/null
         source /etc/os-release
 
         print_key_value "Distribution" "$PRETTY_NAME"

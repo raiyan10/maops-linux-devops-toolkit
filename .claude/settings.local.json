@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bash -c 'readonly -x FOO=bar; export -p | grep FOO')",
+      "Bash(shellcheck *)",
+      "Bash(bash scripts/system/system-info.sh)",
+      "Bash(xargs -0 shellcheck -x -S style)",
+      "Bash(echo \"EXIT_CODE=$?\")",
+      "Bash(bash -c 'set -euo pipefail\nresults=$\\(seq 1 100000 | sort -nr | head -n 5\\)\necho \"OK\"\necho \"$results\"')",
+      "Bash(bash scripts/filesystem/largest-files.sh /usr 5)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(xargs -0 -n1 bash -n)",
+      "Bash(xargs -0 shellcheck -S style)",
+      "Bash(awk '{print $1, $NF}')",
+      "Bash(rm -rf /tmp/repo-check)",
+      "Bash(git clone *)",
+      "Read(//tmp/repo-check/scripts/**)",
+      "Bash(git check-ignore *)",
+      "Bash(xargs -I{} sh -c 'echo \"{}: $\\(wc -c < {}\\) bytes\"')",
+      "Bash(git status *)",
+      "Bash(wsl bash *)",
+      "Bash(MSYS_NO_PATHCONV=1 wsl bash *)"
+    ]
+  }
+}

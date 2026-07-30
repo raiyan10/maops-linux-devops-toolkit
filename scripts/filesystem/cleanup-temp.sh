@@ -1,25 +1,62 @@
 #!/usr/bin/env bash
 
+set -euo pipefail
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# The dynamically resolved dependency is linted independently.
+# shellcheck source=/dev/null
 source "$SCRIPT_DIR/../common/bootstrap.sh"
 
-main() {
+TARGET="${1:-/tmp}"
+LIMIT="${2:-30}"
 
+validate_inputs() {
+    require_command find
+    require_command awk
+
+    if [[ ! -d "$TARGET" ]]; then
+        log_error "Directory not found: $TARGET"
+        return 1
+    fi
+
+    if [[ ! "$LIMIT" =~ ^[1-9][0-9]*$ ]]; then
+        log_error "Limit must be a positive integer: $LIMIT"
+        return 1
+    fi
+}
+
+main() {
     require_linux
+    validate_inputs
 
     show_header "Temporary Files"
+    log_info "Scanning ${TARGET} for accessible temporary files..."
 
-    log_info "Listing temporary files..."
+    local results
 
-    find /tmp \
-        -type f \
-        ! -path "/tmp/systemd-private-*" \
-        2>/dev/null \
-        | head -30
+    results="$(
+        {
+            find "$TARGET" \
+                \( -type d \
+                    \( -name 'systemd-private-*' -o -name 'snap-private-tmp' \) \
+                    -prune \
+                \) \
+                -o \
+                \( -type f -readable -print \) \
+                2>/dev/null || true
+        } |
+            awk -v limit="$LIMIT" 'NR <= limit'
+    )"
 
-    log_warn "Dry-run only. No files removed."
+    if [[ -z "$results" ]]; then
+        log_warn "No accessible regular files found in ${TARGET}."
+    else
+        printf '%s\n' "$results"
+    fi
 
-    log_success "Scan completed."
+    log_warn "Dry-run only. No files were removed."
+    log_success "Temporary-file scan completed."
 }
 
 main "$@"

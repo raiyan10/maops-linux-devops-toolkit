@@ -1,18 +1,16 @@
 #!/usr/bin/env bash
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-source "$SCRIPT_DIR/helpers.sh"
+[[ -n "${MAOPS_OUTPUT_LOADED:-}" ]] && return
+readonly MAOPS_OUTPUT_LOADED=1
 
 show_header() {
     print_title "$1"
 }
 
-show_footer() {
-    echo
-    divider
-}
-
 show_section() {
     section "$1"
+}
+
+show_footer() {
+    divider
 }
