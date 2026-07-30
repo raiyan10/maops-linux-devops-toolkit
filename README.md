@@ -1,4 +1,4 @@
-# maops-linux-devops-toolkit# MAOps Linux DevOps Toolkit
+# MAOps Linux DevOps Toolkit
 
 > A production-inspired Linux automation toolkit for DevOps, Platform Engineering and Cloud Operations.
 
