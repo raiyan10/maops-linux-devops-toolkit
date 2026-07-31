@@ -109,3 +109,52 @@ setup() {
     run validate_tcp_port "443"
     [ "$status" -eq 0 ]
 }
+
+# --- is_non_option_argument / validate_non_option_argument --------------------
+
+@test "is_non_option_argument accepts a normal token" {
+    is_non_option_argument "alice"
+}
+
+@test "is_non_option_argument rejects a leading-dash value" {
+    ! is_non_option_argument "-x"
+}
+
+@test "is_non_option_argument rejects a leading-dash long option" {
+    ! is_non_option_argument "--help"
+}
+
+@test "is_non_option_argument rejects the empty string" {
+    ! is_non_option_argument ""
+}
+
+@test "validate_non_option_argument exits 2 on a leading-dash value" {
+    run validate_non_option_argument "-x" "USERNAME"
+    [ "$status" -eq 2 ]
+}
+
+@test "validate_non_option_argument succeeds silently on a normal token" {
+    run validate_non_option_argument "alice" "USERNAME"
+    [ "$status" -eq 0 ]
+}
+
+# --- is_one_of / validate_one_of -----------------------------------------------
+
+@test "is_one_of accepts a listed choice" {
+    is_one_of "cpu" cpu memory
+}
+
+@test "is_one_of rejects an unlisted choice" {
+    ! is_one_of "disk" cpu memory
+}
+
+@test "validate_one_of exits 2 on an unlisted value and names the allowed choices" {
+    run validate_one_of "disk" "SORT" cpu memory
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"cpu, memory"* ]]
+}
+
+@test "validate_one_of succeeds silently on a listed value" {
+    run validate_one_of "memory" "SORT" cpu memory
+    [ "$status" -eq 0 ]
+}

@@ -42,3 +42,37 @@ validate_tcp_port() {
 
     is_valid_port "$value" || cli_usage_error "Port must be an integer from 1 to 65535: $value"
 }
+
+is_non_option_argument() {
+    [[ -n "$1" && "$1" != -* ]]
+}
+
+validate_non_option_argument() {
+    local value="$1"
+    local label="$2"
+
+    is_non_option_argument "$value" || cli_usage_error "$label must not be empty or start with '-': $value"
+}
+
+is_one_of() {
+    local value="$1"
+    shift
+
+    local choice
+    for choice in "$@"; do
+        [[ "$value" == "$choice" ]] && return 0
+    done
+
+    return 1
+}
+
+validate_one_of() {
+    local value="$1"
+    local label="$2"
+    shift 2
+
+    is_one_of "$value" "$@" || {
+        local choices="$*"
+        cli_usage_error "$label must be one of: ${choices// /, } (got: $value)"
+    }
+}
