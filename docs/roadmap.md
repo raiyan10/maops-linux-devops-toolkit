@@ -81,14 +81,43 @@ High findings.
 - Covers the CLI dispatcher, `scripts/common/cli.sh`'s validation helpers,
   and the network module's `--help` and invalid-input rejection paths; no
   test requires internet access
+- Extended with a deterministic PATH-based command-stub convention
+  (`stub_bin_init`/`stub_command` in `tests/test-helper.bash`) so the user,
+  process, and service modules can be tested without depending on the
+  host's real accounts, process list, logged-in sessions, or init system
 - `scripts/common/{colors,config,helpers,logger,output}.sh` and the
   `system`/`monitoring`/`filesystem` leaf scripts still have no dedicated
   Bats coverage — see Planned below
 
+**User module** (`scripts/users/`)
+- Read-only user report (`user-report.sh`) via `getent`/`id`/`who`:
+  username, UID, primary GID, home directory, login shell, group
+  memberships, active-session status; never reads password hashes or
+  `/etc/shadow`
+- See [architecture.md §9](architecture.md#9-user-process-and-service-modules)
+
+**Process module** (`scripts/process/`)
+- Read-only top-N process report (`process-monitor.sh`) via `ps`, sorted by
+  CPU or memory, row-truncated in `awk` (never `head`, to avoid the same
+  SIGPIPE class of bug fixed in `largest-files.sh`)
+- See [architecture.md §9](architecture.md#9-user-process-and-service-modules)
+
+**Service module** (`scripts/service/`)
+- Read-only service status inspection (`service-status.sh`); prefers
+  `systemctl show` when systemd is genuinely running, falls back to
+  `service SERVICE status` (LSB exit codes) otherwise; never
+  starts/stops/restarts/enables/disables a service
+- See [architecture.md §9](architecture.md#9-user-process-and-service-modules)
+
 ## Planned
 
-- **User and process module** (`scripts/users/`) — user report, last-login
-  report; directory does not exist yet
+- **Last-login report** — a historical login-history report (e.g. via
+  `last`/`lastlog`) was considered alongside the Day 4 user module but
+  deferred; the current-session report in `user-report.sh` does not cover
+  historical logins
+- **Per-script `Version:` header stamps are inconsistent** —
+  `scripts/network/*.sh` still say `0.2.0` and `largest-files.sh` has no
+  version stamp at all; a small deferred cleanup, not a functional issue
 - **Installation and packaging** — no installer or package target yet
 - **Architecture diagrams** — visual complement to `docs/architecture.md`
 - **Medium technical article**

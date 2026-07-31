@@ -408,3 +408,145 @@ script text. See
 specifically to `port-check.sh`, and
 [troubleshooting.md §12](troubleshooting.md#12-why-port-checksh-uses-bash--c-with-1-2-instead-of-host-directly)
 for the symptom this fixes.
+
+---
+
+## 12. Read-Only Operations by Default
+
+The user, process, and service modules
+([architecture.md §9](architecture.md#9-user-process-and-service-modules))
+extend the safe-defaults principle from §5 further: it is not enough that a
+*destructive* operation defaults to a dry run — an entire module can be
+scoped so that no destructive operation is reachable through it at all.
+`user-report.sh`, `process-monitor.sh`, and `service-status.sh` each only
+ever call query-style subcommands (`getent`, `id`, `who`, `ps`, `systemctl
+show`, `service ... status`); none of them contain `kill`, `pkill`,
+`renice`, `nice`, or a systemd/`service` verb that mutates state (`start`,
+`stop`, `restart`, `reload`, `enable`, `disable`, `mask`). None of the three
+require `sudo` — every command they run works for an unprivileged caller.
+
+This also extends to *what* is reported, not just what is done:
+`process-monitor.sh` reports `ps -o comm` (the executable name) rather than
+`ps -o args` (the full command line) specifically because `args` routinely
+contains secrets — `--password=...`, API tokens, database connection
+strings — passed as process arguments on a shared host. Similarly,
+`user-report.sh` reads the passwd password-placeholder field into `_` and
+never prints it, and never calls `getent shadow` or reads `/etc/shadow` — a
+read-only report should not become a second way to leak what the read-only
+policy was supposed to protect in the first place.
+
+## 13. Service-Manager Detection and Fallback
+
+`service-status.sh` needs to answer "is systemd the running init system?"
+before it knows whether to run `systemctl` or `service`. `command -v
+systemctl` is not a sufficient test: the `systemctl` binary is commonly
+installed in environments where systemd is *not* PID 1 — most container
+images and WSL among them — and running it there fails with something like
+`Failed to connect to bus: No such file or directory`, which is a confusing
+result if the script had already committed to the systemd branch.
+
+The correct check is whether `/run/systemd/system` exists — the same
+runtime marker systemd's own `sd_booted(3)` function checks to mean "systemd
+is genuinely running":
+
+```bash
+readonly SYSTEMD_RUNTIME_DIR="${MAOPS_SYSTEMD_RUNTIME_DIR:-/run/systemd/system}"
+systemd_is_running() {
+    command_exists systemctl && [[ -d "$SYSTEMD_RUNTIME_DIR" ]]
+}
+```
+
+`MAOPS_SYSTEMD_RUNTIME_DIR` exists purely as a test seam: it lets a test
+force either branch deterministically (point it at a real directory to
+select `systemctl`, or a nonexistent path to force the `service` fallback)
+without needing root, a container, or a host that genuinely lacks systemd.
+It is read-only — it only changes which query the script runs, never what
+the query does — so overriding it cannot cause a mutation.
+
+Once a branch is selected, the two backends are queried differently on
+purpose:
+
+- **`systemctl show --property=LoadState,ActiveState,SubState`**, not
+  `systemctl is-active`. `show` exits `0` in every normal case, including a
+  unit that does not exist (`LoadState=not-found`) — so a non-zero exit from
+  `show` unambiguously means `systemctl` itself failed (bus error,
+  permission problem), and must be surfaced as a failure rather than mapped
+  to "inactive." `is-active` conflates these cases: it returns different
+  non-zero codes for "inactive," "not found," *and* a genuine bus failure,
+  making them impossible to tell apart from the exit code alone.
+- **`service SERVICE status`**, interpreted by its LSB init-script exit code
+  (`0` running, `3` stopped, `4` unknown/no-such-service) — never by
+  pattern-matching its free-form status text, which varies across
+  distributions and individual init scripts and would be a fragile,
+  spoofable signal to make a pass/fail decision on.
+
+Either way, an exit code that doesn't fit a recognized case (e.g. `service`
+returning `1` or `2` for a malformed invocation) is reported as an explicit
+lookup failure, not silently folded into "stopped" — see §15.
+
+## 14. Deterministic PATH-Based Test Stubs
+
+`user-report.sh`, `process-monitor.sh`, and `service-status.sh` wrap host
+commands (`getent`, `id`, `who`, `ps`, `systemctl`, `service`) whose real
+output depends on the host's actual accounts, process list, logged-in
+sessions, and init system — none of which a test suite should depend on
+(see [troubleshooting.md](troubleshooting.md) for the general principle of
+keeping CI deterministic). `tests/test-helper.bash` provides two helpers to
+fake these commands per test:
+
+```bash
+stub_bin_init            # creates $BATS_TEST_TMPDIR/stubs, prepends it to $PATH
+stub_command NAME <<'STUB'
+...stub body, reads its own "$@" like a real command would...
+STUB
+```
+
+A stub is a plain executable script generated fresh into
+`$BATS_TEST_TMPDIR` for that one test, not a file checked into the
+repository. This is deliberate: a `$PATH`-discoverable stub must be named
+exactly `systemctl`/`ps`/etc — no `.sh` suffix — or the shell would never
+find it via a bare-name lookup. A checked-in extensionless file would sit
+outside `make check-executable`'s `*.sh`/`bin/maops` glob, which is exactly
+the kind of gap that let scripts get tracked as non-executable in the past
+(see
+[troubleshooting.md §4](troubleshooting.md#4-wsl-and-windows-git-executable-mode-behavior)).
+Generating stubs at test time keeps them entirely outside that risk. No
+`teardown()` is needed either — Bats gives every test its own subshell and
+environment and removes `$BATS_TEST_TMPDIR` itself once the test finishes.
+
+Guardrails when writing a new stub-based test:
+
+- **Prepend, don't replace** `$PATH` — the script under test still needs
+  every real coreutil it depends on (`awk`, `date`, `printf`, ...).
+- **Never stub `date`, `uname`, `awk`, `printf`, or `cat`** — the common
+  library and Bats' own test machinery depend on the real versions of these.
+- **Prefer a recording stub** — have it append its own `"$*"` to a
+  `*.calls` log file under `$BATS_TEST_TMPDIR` — so a test can assert what
+  the script under test actually invoked (e.g. "the `service` stub was
+  called and the `systemctl` stub was not," or "no stub was ever invoked
+  with `start`/`stop`/`enable`"), turning read-only and
+  injection-resistance guarantees into behavioral assertions instead of
+  assumptions about output text.
+
+## 15. Exit-Code Conventions
+
+Every script in this toolkit follows the same three-way exit-code contract,
+enforced consistently by `scripts/common/cli.sh`'s `cli_usage_error` (always
+exit `2`) and by each script's own `main()`:
+
+| Exit | Meaning | Example |
+|---|---|---|
+| `0` | Success | A service is active; a user/process report was produced |
+| `1` | Operational failure — the command ran but the real-world answer is "no"/"not found"/"unavailable," or a required dependency/platform check failed | Unknown user (`user-report.sh`), inactive/unknown service (`service-status.sh`), a missing required command (`require_command`) |
+| `2` | CLI usage error — the caller's input was invalid before any real work started | Missing required argument, option-like value, out-of-range/non-numeric value, unrecognized enum value |
+
+The rule that keeps this contract meaningful is: **never let an unexpected
+failure masquerade as a normal negative result.** `service-status.sh` is the
+clearest example — `systemctl show` exiting non-zero (a bus error) is a
+*different* situation from a unit legitimately being inactive, and the
+script deliberately keeps them distinguishable (both still exit `1`, since
+both are operational rather than usage failures, but the message differs
+and the bus error's stderr is captured and shown rather than discarded). The
+same discipline applies to `service`'s fallback exit codes (§13): an exit
+code outside the known LSB set (`0`, `3`, `4`) is reported as an explicit
+lookup failure, never silently treated as "stopped."

@@ -35,12 +35,18 @@ Groups and commands:
     monitoring  memory | cpu | load
     filesystem  disk | largest [PATH] [LIMIT] | temp [PATH] [LIMIT]
     network     info | ping HOST [COUNT] | dns HOSTNAME | port HOST PORT [TIMEOUT]
+    user        report [USERNAME]
+    process     top [LIMIT] [cpu|memory]
+    service     status SERVICE
 
 Examples:
     maops system info
     maops monitoring memory
     maops filesystem largest /var/log 20
     maops network ping example.com 4
+    maops user report
+    maops process top 15 memory
+    maops service status cron
 EOF
 }
 
@@ -107,6 +113,36 @@ dispatch_network() {
     esac
 }
 
+dispatch_user() {
+    local action="$1"
+    shift
+
+    case "$action" in
+        report) exec "$REPO_ROOT/scripts/users/user-report.sh" "$@" ;;
+        *) usage_error "Unknown user command: $action (expected: report)" ;;
+    esac
+}
+
+dispatch_process() {
+    local action="$1"
+    shift
+
+    case "$action" in
+        top) exec "$REPO_ROOT/scripts/process/process-monitor.sh" "$@" ;;
+        *) usage_error "Unknown process command: $action (expected: top)" ;;
+    esac
+}
+
+dispatch_service() {
+    local action="$1"
+    shift
+
+    case "$action" in
+        status) exec "$REPO_ROOT/scripts/service/service-status.sh" "$@" ;;
+        *) usage_error "Unknown service command: $action (expected: status)" ;;
+    esac
+}
+
 ###############################################################################
 # Main
 ###############################################################################
@@ -127,7 +163,7 @@ main() {
             exit 0
             ;;
 
-        system | monitoring | filesystem | network)
+        system | monitoring | filesystem | network | user | process | service)
             local group="$1"
             shift
 
@@ -139,7 +175,7 @@ main() {
             ;;
 
         *)
-            usage_error "Unknown command or group: $1 (expected: help, version, system, monitoring, filesystem, network)"
+            usage_error "Unknown command or group: $1 (expected: help, version, system, monitoring, filesystem, network, user, process, service)"
             ;;
     esac
 }

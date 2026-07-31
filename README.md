@@ -53,6 +53,8 @@ This repository is part of the **MAOps Technologies Engineering Portfolio**.
 .
 ├── .claude
 │   ├── CLAUDE.md
+│   ├── agents
+│   │   └── bash-test-engineer.md
 │   ├── settings.local.json
 │   └── skills
 │       ├── bash-review
@@ -70,9 +72,13 @@ This repository is part of the **MAOps Technologies Engineering Portfolio**.
 │   ├── architecture.md
 │   ├── best-practices.md
 │   ├── engineering-reviews
-│   │   └── day-02.md
+│   │   ├── day-02.md
+│   │   ├── day-02-release-readiness.md
+│   │   ├── day-03-release-readiness.md
+│   │   └── day-03-release-readiness-followup.md
 │   ├── images
-│   │   └── day-02
+│   │   ├── day-02
+│   │   └── day-03
 │   ├── roadmap.md
 │   └── troubleshooting.md
 ├── scripts
@@ -97,10 +103,16 @@ This repository is part of the **MAOps Technologies Engineering Portfolio**.
 │   │   ├── network-info.sh
 │   │   ├── ping-check.sh
 │   │   └── port-check.sh
-│   └── system
-│       ├── hostname-report.sh
-│       ├── os-details.sh
-│       └── system-info.sh
+│   ├── process
+│   │   └── process-monitor.sh
+│   ├── service
+│   │   └── service-status.sh
+│   ├── system
+│   │   ├── hostname-report.sh
+│   │   ├── os-details.sh
+│   │   └── system-info.sh
+│   └── users
+│       └── user-report.sh
 ├── templates
 │   ├── github-workflow-template.yml
 │   ├── readme-template.md
@@ -113,6 +125,12 @@ This repository is part of the **MAOps Technologies Engineering Portfolio**.
 │   │   └── helpers.bats
 │   ├── network
 │   │   └── network-tools.bats
+│   ├── process
+│   │   └── process-monitor.bats
+│   ├── service
+│   │   └── service-status.bats
+│   ├── users
+│   │   └── user-report.bats
 │   └── test-helper.bash
 ├── .gitattributes
 ├── .gitignore
@@ -122,8 +140,6 @@ This repository is part of the **MAOps Technologies Engineering Portfolio**.
 ├── Makefile
 └── README.md
 ```
-
-`scripts/users` is a planned module and does not exist in the tree yet — see [Utilities](#utilities) below.
 
 ---
 
@@ -156,14 +172,23 @@ This repository is part of the **MAOps Technologies Engineering Portfolio**.
 - [x] DNS Lookup — `dns-lookup.sh`
 - [x] Port Checker — `port-check.sh`
 
+### Users (`scripts/users`)
+
+- [x] User Report (read-only: username, UID, primary GID, home directory, login shell, group memberships, active-session status) — `user-report.sh`
+
+### Process (`scripts/process`)
+
+- [x] Top Processes by CPU or Memory (read-only) — `process-monitor.sh`
+
+### Service (`scripts/service`)
+
+- [x] Service Status (read-only; `systemctl` with a `service(8)` fallback) — `service-status.sh`
+
 All utilities above are also reachable through the unified [`maops` CLI](#cli-usage) at `bin/maops`.
 
 ## Planned
 
-### Users (`scripts/users`, not yet created)
-
-- [ ] User Report
-- [ ] Last Login Report
+- [ ] Last Login Report (historical login history, e.g. via `last`/`lastlog` — distinct from the current-session check in `user-report.sh`)
 
 ---
 
@@ -191,9 +216,43 @@ maops network info
 maops network ping example.com 4
 maops network dns example.com
 maops network port example.com 443 2
+
+maops user report
+maops user report alice
+
+maops process top
+maops process top 5 cpu
+maops process top 15 memory
+
+maops service status cron
 ```
 
 Unknown groups or commands print an actionable error and exit with status `2`. Every dispatched command exits with that underlying script's own exit code.
+
+---
+
+# User, Process, and Service Utilities
+
+These three modules are strictly read-only — none of them ever starts, stops, restarts, enables, disables, kills, or renices anything, and none require `sudo`.
+
+```bash
+# Read-only account report: username, UID, primary GID, home directory,
+# login shell, group memberships, active-session status. USERNAME is
+# optional and defaults to the current effective user.
+./scripts/users/user-report.sh
+./scripts/users/user-report.sh alice
+
+# Top-N processes by CPU (default) or memory. LIMIT defaults to 10.
+./scripts/process/process-monitor.sh
+./scripts/process/process-monitor.sh 5 cpu
+./scripts/process/process-monitor.sh 15 memory
+
+# Read-only service status. Prefers systemctl when systemd is genuinely the
+# running init system, falls back to the service(8) command otherwise.
+./scripts/service/service-status.sh cron
+```
+
+See [docs/architecture.md §9](docs/architecture.md#9-user-process-and-service-modules) for tool choices and the service-manager detection strategy, and [docs/best-practices.md §12–§15](docs/best-practices.md#12-read-only-operations-by-default) for the read-only, detection/fallback, test-stub, and exit-code conventions these modules establish.
 
 ---
 
@@ -273,7 +332,7 @@ This project follows:
 - [x] Unified `maops` CLI
 - [x] Network utilities
 - [x] Bats automated tests
-- [ ] User and process utilities
+- [x] User, process, and service utilities
 - [ ] Installation and packaging
 - [ ] Architecture diagrams
 - [ ] Medium technical article

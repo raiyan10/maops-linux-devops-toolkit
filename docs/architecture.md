@@ -21,7 +21,10 @@ what is intentionally not built yet.
 │   ├── filesystem       # Disk usage, largest files, temp-file scanning
 │   ├── monitoring       # CPU, memory, load-average reporting
 │   ├── network          # Network info, ping, DNS lookup, port checking
-│   └── system           # Host identity and OS reporting
+│   ├── process          # Read-only top-N process reporting
+│   ├── service          # Read-only service status inspection
+│   ├── system           # Host identity and OS reporting
+│   └── users            # Read-only user account reporting
 ├── templates            # Boilerplate for generating new scripts/docs/workflows
 ├── tests                # Bats test suite
 ├── CHANGELOG.md / CONTRIBUTING.md / LICENSE / Makefile
@@ -34,9 +37,6 @@ of them reimplement logging, argument echoing, or output formatting locally.
 `bin/maops` follows the same rule at the dispatch level — it sources
 `scripts/common/bootstrap.sh` once and `exec`s into the leaf scripts rather
 than reimplementing them (see §7).
-`scripts/users` is a planned module (see
-[README.md](../README.md#utilities)) and does not exist yet — when it is
-added, it follows the same pattern described below.
 
 ---
 
@@ -51,7 +51,7 @@ added, it follows the same pattern described below.
 | `helpers.sh` | Generic utilities: `command_exists`, `require_command`, `require_linux`, `divider`, `print_title`, `section`, `print_key_value` |
 | `logger.sh` | Leveled console logging: `log_info`, `log_success`, `log_warn`, `log_error`, all timestamped and colorized |
 | `output.sh` | Thin presentation wrappers over `helpers.sh` primitives: `show_header`, `show_section`, `show_footer` |
-| `cli.sh` | CLI-only concerns consumed by `bin/maops` and the network scripts: `cli_show_version`, `is_help_flag`, `is_version_flag`, `cli_usage_error` (log + exit 2), `is_positive_integer`/`validate_positive_integer`, `is_valid_port`/`validate_tcp_port` |
+| `cli.sh` | CLI-only concerns consumed by `bin/maops` and the network/users/process/service scripts: `cli_show_version`, `is_help_flag`, `is_version_flag`, `cli_usage_error` (log + exit 2), `is_positive_integer`/`validate_positive_integer`, `is_valid_port`/`validate_tcp_port`, `is_non_option_argument`/`validate_non_option_argument` (rejects empty or leading-dash values), `is_one_of`/`validate_one_of` (generic allow-listed-value validator) |
 
 Each file guards against being sourced twice using the same pattern:
 
@@ -253,6 +253,17 @@ Dispatch table (`bin/maops`'s `dispatch_<group>()` functions):
 | `monitoring` | `memory` / `cpu` / `load` | `scripts/monitoring/{memory-report,cpu-monitor,load-average}.sh` |
 | `filesystem` | `disk` / `largest` / `temp` | `scripts/filesystem/{disk-usage,largest-files,cleanup-temp}.sh` |
 | `network` | `info` / `ping` / `dns` / `port` | `scripts/network/{network-info,ping-check,dns-lookup,port-check}.sh` |
+| `user` | `report` | `scripts/users/user-report.sh` |
+| `process` | `top` | `scripts/process/process-monitor.sh` |
+| `service` | `status` | `scripts/service/service-status.sh` |
+
+`user`, `process`, and `service` each have exactly one command today, but
+they still get their own `dispatch_<group>()` function rather than an inline
+`exec` in `main()`. `main()`'s group-match case arm calls `"dispatch_$group"
+"$@"` generically for every known group name — that dynamic dispatch is the
+whole mechanism, not per-group special-casing, so giving a single-command
+group its own function keeps every group uniform instead of forking `main()`
+into two different dispatch styles.
 
 **Exit-code split**: `maops` itself only ever returns exit code `2` for its
 *own* usage errors — no command given, an unknown group, or an unknown
@@ -320,11 +331,108 @@ for the failure mode this prevents.
 
 ---
 
-## 9. Tests
+## 9. User, Process, and Service Modules
+
+These three modules are strictly read-only: none of them ever starts, stops,
+restarts, reloads, enables, disables, kills, or renices anything. Each
+follows the same `parse_args()`/`main()` shape established by the network
+module (§8), adapted from `templates/script-template.sh`.
+
+| Script | Tool(s) used | Why |
+|---|---|---|
+| `users/user-report.sh` | `getent passwd`, `id -gn`/`id -nG`, `who` | `getent passwd` returns both existence and every passwd(5) field in one call — a nonexistent user is a normal non-zero exit, not a special case. Group *names* (as opposed to the numeric GID already in the passwd entry) need `id`, since passwd only stores the numeric primary GID. Session presence is derived from `who`'s output with a fixed, single-quoted `awk` program (`awk -v user="$target" '$1 == user {...}'`) — the target username enters only as an `awk` variable value, never string-interpolated into the program, so a crafted username cannot inject `awk` code (e.g. via `system(...)`) |
+| `process/process-monitor.sh` | `ps -eo pid,user,pcpu,pmem,etime,comm --sort=...` | `comm` (executable name only) is used instead of `args` (full command line) so process secrets — `--password=...`, tokens, connection strings routinely visible on a full command line — are never printed. `--sort=-pcpu`/`--sort=-pmem` is chosen by a fixed `case` statement after `SORT` passes `validate_one_of`, so user input is never spliced into the sort flag itself |
+| `service/service-status.sh` | `systemctl show` **or** `service STATUS` | See detection strategy below |
+
+**Password/shadow disclosure is closed off structurally, not by convention**:
+`user-report.sh` reads the passwd password-placeholder field into `_` and
+never prints it, and never calls `getent shadow` or reads `/etc/shadow` — so
+there is no code path through which a password hash could reach the output,
+regardless of caller privilege.
+
+**No `head`-truncation in `process-monitor.sh`**: row-limiting happens via
+`ps ... | awk -v limit="$LIMIT" 'NR <= limit + 1'`, not `ps ... | head -n
+"$LIMIT"`. This is the same fix already applied to `largest-files.sh` (§4) —
+`head` closing its read end as soon as it has enough lines sends the
+upstream process a `SIGPIPE`, which turns the pipeline's exit status into
+`141` under `set -o pipefail`. `awk` always reads its input to EOF, so `ps`
+exits normally regardless of how large `LIMIT` is relative to the real
+process count.
+
+**Service-manager detection** (`service-status.sh`): a Linux host can have
+the `systemctl` *binary* installed without systemd actually being the running
+init system — true of most containers and of WSL. Checking `command -v
+systemctl` alone would wrongly select the systemd path there and then fail
+with a bus-connection error. The script instead checks whether
+`/run/systemd/system` exists — the same probe systemd's own `sd_booted(3)`
+function uses to mean "systemd is genuinely running" — and only takes the
+`systemctl` path when that directory is present:
+
+```bash
+readonly SYSTEMD_RUNTIME_DIR="${MAOPS_SYSTEMD_RUNTIME_DIR:-/run/systemd/system}"
+systemd_is_running() {
+    command_exists systemctl && [[ -d "$SYSTEMD_RUNTIME_DIR" ]]
+}
+```
+
+`MAOPS_SYSTEMD_RUNTIME_DIR` is a documented, read-only test seam: it only
+selects which status query the script runs, so it cannot cause a mutation.
+It exists because a real systemd host (including this project's CI runner)
+can never otherwise exercise the `service(8)` fallback branch, and a plain
+container can never otherwise exercise the `systemctl` branch — see
+[best-practices.md §13](best-practices.md#13-service-manager-detection-and-fallback).
+
+`systemctl show --property=LoadState,ActiveState,SubState`, not `systemctl
+is-active`, is used to query state: `show` exits `0` in every normal case,
+including a unit that does not exist (`LoadState=not-found`), so a non-zero
+exit unambiguously means `systemctl` itself failed (bus error, permission
+issue) rather than "the service is in some particular state." That failure
+is surfaced as exit `1` with the captured error text, never silently mapped
+to "inactive." The `service(8)` fallback instead relies purely on the LSB
+init-script exit-code convention (`0` running, `3` stopped, `4` unknown) —
+the free-form status text is only ever echoed for the operator, never
+pattern-matched, since wording varies across distributions and init
+scripts.
+
+Full exit-code mapping:
+
+| Exit | Meaning |
+|---|---|
+| `0` | Service is active/running |
+| `1` | Inactive, stopped, unknown/not-found, no supported service manager available, or the status lookup itself failed |
+| `2` | CLI usage error (missing `SERVICE`, option-like `SERVICE`) |
+
+Neither `user-report.sh`, `process-monitor.sh`, nor `service-status.sh` ever
+uses `eval` or interpolates a user-supplied value into a string that gets
+re-parsed as shell syntax (the same command-injection class fixed in
+`port-check.sh`, §8) — `USERNAME`/`SERVICE`/`LIMIT` are always passed as
+normal argv elements or `awk -v` values.
+
+---
+
+## 10. Tests
 
 `tests/` holds the Bats suite (`tests/test-helper.bash` plus `tests/cli/`,
-`tests/common/`, `tests/network/`). It is intentionally excluded from
-`bash -n`/ShellCheck (`.bats` files aren't plain Bash) and instead run via
-`make test`, which is itself one stage of `make quality`. No test depends on
-real internet access — invalid-input tests are rejected before any network
-call is made, and the one optional network-adjacent check stays on loopback.
+`tests/common/`, `tests/network/`, `tests/users/`, `tests/process/`,
+`tests/service/`). It is intentionally excluded from `bash -n`/ShellCheck
+(`.bats` files aren't plain Bash) and instead run via `make test`, which is
+itself one stage of `make quality`. No test depends on real internet
+access — invalid-input tests are rejected before any network call is made,
+and the one optional network-adjacent check stays on loopback.
+
+The user, process, and service test files additionally depend on
+deterministic PATH-based command stubs, since real `getent`/`id`/`who`/`ps`/
+`systemctl`/`service` output varies by host, session state, and init system.
+`tests/test-helper.bash` provides `stub_bin_init` (creates a fresh stub
+directory under `$BATS_TEST_TMPDIR` and prepends it to `$PATH`) and
+`stub_command NAME <<'STUB' ... STUB` (writes an executable fake `NAME` into
+that directory from a heredoc body). Stubs are generated per-test rather than
+checked into the repository as static files, because a checked-in stub must
+be named exactly `systemctl`/`ps`/etc. (no `.sh` suffix) to be found via
+`$PATH` lookup — which would put it outside `make check-executable`'s
+`*.sh`/`bin/maops` glob and could silently reintroduce the WSL/drvfs
+executable-mode gotcha recorded in
+[troubleshooting.md §4](troubleshooting.md#4-wsl-and-windows-git-executable-mode-behavior).
+See
+[best-practices.md §14](best-practices.md#14-deterministic-path-based-test-stubs)
+for the full convention and its guardrails.
