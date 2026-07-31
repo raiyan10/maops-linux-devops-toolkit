@@ -16,6 +16,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck source=scripts/common/bootstrap.sh
 source "$SCRIPT_DIR/../common/bootstrap.sh"
+# shellcheck source=scripts/common/config-file.sh
+source "$SCRIPT_DIR/../common/config-file.sh"
 
 readonly DEFAULT_PING_COUNT=4
 
@@ -88,7 +90,7 @@ parse_args() {
     fi
 
     HOST="${positional[0]}"
-    COUNT="${positional[1]:-$DEFAULT_PING_COUNT}"
+    COUNT="${positional[1]:-$(config_resolve_value ping_count "" MAOPS_PING_COUNT "$DEFAULT_PING_COUNT")}"
 
     validate_positive_integer "$COUNT" "COUNT"
 }

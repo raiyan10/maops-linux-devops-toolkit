@@ -426,3 +426,108 @@ for the general rule this establishes, and
 `tests/network/network-tools.bats`'s `"port-check.sh does not execute shell
 metacharacters embedded in HOST"` test for the regression coverage that now
 guards against this reappearing.
+
+---
+
+## 13. `maops: command not found` After `make install`
+
+**Symptom:** `make install` reports success, but a new shell session (or a
+non-interactive script) can't find `maops`:
+
+```text
+$ maops --version
+bash: maops: command not found
+```
+
+**Cause:** The default install prefix is `$HOME/.local`, so the launcher
+lands at `$HOME/.local/bin/maops`. Most distributions only add
+`~/.local/bin` to `$PATH` for *interactive login* shells (via
+`~/.profile`/`~/.bash_profile`), so a fresh non-login shell, a cron job, or a
+CI step may not have it on `$PATH` yet.
+
+**Fix:** Either add `export PATH="$HOME/.local/bin:$PATH"` to your shell's
+startup file and start a new shell, or invoke the launcher by its full path
+(`"$HOME/.local/bin/maops" --version`) — which always works regardless of
+`$PATH`, since the installed launcher resolves its own location through the
+symlink correctly (see
+[architecture.md §7](architecture.md#7-unified-maops-cli)). `make
+smoke-install` deliberately invokes the installed CLI by full path rather
+than relying on `$PATH`, for exactly this reason.
+
+---
+
+## 14. `maops config validate` Rejects a Config File as Malformed or Unknown-Key
+
+**Symptom:** `maops config validate` (or `doctor`) reports a config file as
+invalid, even though it "looks right" when opened in an editor.
+
+**Cause:** The parser in `scripts/common/config-file.sh` is intentionally
+strict (see
+[architecture.md §12](architecture.md#12-configuration-system)) — every line
+must be blank, a `#`-prefixed comment, or match `KEY=VALUE` exactly, where
+`KEY` is one of the four supported keys (`output_format`, `process_limit`,
+`ping_count`, `network_timeout`). Common causes:
+
+- A typo'd key name (`output-format` instead of `output_format`, or any key
+  not in the fixed list) — reported as "unknown key."
+- The same key listed twice — reported as "duplicate key," even if both
+  occurrences have the same value.
+- A line that isn't a comment, blank, or `KEY=VALUE` at all (e.g. a stray
+  fragment left from a merge) — reported as "malformed line."
+- A value that doesn't match its key's expected shape — `output_format` must
+  be exactly `text` or `json`; the other three keys must be positive
+  integers (`0`, a negative number, a leading zero like `007`, or non-numeric
+  text all fail).
+
+**Fix:** Run `maops config validate` directly — its error messages name the
+specific line number and problem. This strictness is deliberate, not a bug:
+the parser never sources or evaluates the file, so a rejected value (even
+one containing `$(...)` or `;`) is always inert text, never executed — see
+[best-practices.md §17](best-practices.md#17-config-file-parsing-without-eval-or-source).
+To start over, `maops config init --force` regenerates a known-valid default
+file.
+
+---
+
+## 15. Interpreting a `maops doctor` Failure in a Minimal Environment
+
+**Symptom:** `maops doctor` exits `1` inside a minimal container or a fresh
+CI image, listing several `command_*` checks as `fail`.
+
+**Cause:** This is doctor working as intended, not a bug — a minimal base
+image commonly lacks one or more of the required runtime commands
+(`bash awk find sort ps getent ip ping timeout df free lscpu uptime`, plus a
+`systemctl`-or-`service` service manager). Doctor reports each missing
+required command by name so the gap is actionable rather than a generic
+failure.
+
+**Fix:** Install the missing package(s) for your distribution (commonly
+`iproute2` for `ip`, `iputils-ping` for `ping`, `procps` for `ps`/`free`/
+`uptime`, `util-linux` for `lscpu`). A missing **optional** development tool
+(`git make shellcheck bats python3`) is only ever a warning — doctor still
+exits `0` in that case, since those tools aren't needed to *run* the
+toolkit, only to develop it. See
+[architecture.md §14](architecture.md#14-doctor-command) for the full
+required-vs-optional check list.
+
+---
+
+## 16. `verify-package.sh` Fails After Manually Editing an Archive
+
+**Symptom:** `make verify-package` (or `scripts/release/verify-package.sh`)
+fails with a checksum mismatch after the `dist/*.tar.gz` file was edited,
+re-compressed, or copied through a tool that altered it in any way.
+
+**Cause:** This is the intended behavior, not a bug — checksum verification
+exists precisely to detect any modification, however small, between when
+`package.sh` built the archive and when it's verified or installed from.
+Re-compressing an archive (even with identical file contents) generally
+changes its bytes, since gzip's own reproducibility depends on the exact
+flags used (see
+[architecture.md §15](architecture.md#15-packaging-and-release-verification)).
+
+**Fix:** Rebuild the archive from source with `make package` rather than
+editing an existing one — the checksum file is regenerated alongside it, so
+the two always match a freshly built pair. If you need to confirm two builds
+from the same source tree are identical, compare their SHA-256 sums directly
+rather than editing either archive in place.

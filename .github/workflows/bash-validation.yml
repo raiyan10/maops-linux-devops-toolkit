@@ -24,10 +24,23 @@ jobs:
       - name: Install ShellCheck and Bats
         run: |
           sudo apt-get update
-          sudo apt-get install --yes shellcheck bats
+          sudo apt-get install --yes shellcheck bats python3
 
       - name: Run quality checks
         run: make quality
+
+      - name: Build release package
+        run: make package
+
+      - name: Verify release package
+        run: make verify-package
+
+      - name: Smoke-test install / doctor / uninstall
+        env:
+          HOME: ${{ runner.temp }}/maops-ci-home
+        run: |
+          mkdir -p "$HOME"
+          make smoke-install
 
       - name: Validation completed
         run: echo "All Bash quality checks passed."

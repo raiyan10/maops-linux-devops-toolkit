@@ -109,6 +109,38 @@ High findings.
   starts/stops/restarts/enables/disables a service
 - See [architecture.md §9](architecture.md#9-user-process-and-service-modules)
 
+**Configuration system** (`scripts/common/config-file.sh`, `scripts/config/`)
+- Plain-text config file at `${MAOPS_CONFIG_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/maops/config}`,
+  parsed via a `read -r` loop only — never sourced or eval'd
+- `output_format`/`process_limit`/`ping_count`/`network_timeout` keys, with
+  CLI-argument → `MAOPS_*` env var → config-file → built-in-default
+  precedence resolved once (`config_resolve_value`) and reused by
+  `config show`, `doctor`, and `process-monitor.sh`/`ping-check.sh`/`port-check.sh`'s
+  defaults
+- `maops config path|init [--force]|show [--format text|json]|validate [PATH]`
+- See [architecture.md §12](architecture.md#12-configuration-system)
+
+**Structured JSON output** (`scripts/common/format.sh`)
+- Dependency-free JSON escaping/assembly, no `eval`, no runtime `jq`
+- Scoped to exactly `config show --format json` and `doctor --format json`
+  in this release
+- See [architecture.md §13](architecture.md#13-structured-output-json-scope)
+
+**Doctor command** (`scripts/diagnostics/doctor.sh`)
+- Toolkit version, execution mode, OS, Bash version, config state, required
+  runtime commands, and optional dev tools — read-only, no network calls
+- See [architecture.md §14](architecture.md#14-doctor-command)
+
+**Installation and packaging** (`scripts/install/`, `scripts/release/`)
+- User-local install/uninstall with a staged, manifest-verified runtime
+  tree; never `sudo`, never system-wide by default
+- Reproducible release tarball (`package.sh`) plus SHA-256 checksum
+  verification with pre-extraction archive-safety checks (`verify-package.sh`)
+- `bin/maops` now resolves its own location through symlinks (a genuine bug
+  fix required for the installed launcher to work at all)
+- See [architecture.md §11](architecture.md#11-installation-and-runtime-layout)
+  and [architecture.md §15](architecture.md#15-packaging-and-release-verification)
+
 ## Planned
 
 - **Last-login report** — a historical login-history report (e.g. via
@@ -118,7 +150,6 @@ High findings.
 - **Per-script `Version:` header stamps are inconsistent** —
   `scripts/network/*.sh` still say `0.2.0` and `largest-files.sh` has no
   version stamp at all; a small deferred cleanup, not a functional issue
-- **Installation and packaging** — no installer or package target yet
 - **Architecture diagrams** — visual complement to `docs/architecture.md`
 - **Medium technical article**
 - **Remaining template stubs** — `templates/readme-template.md`,

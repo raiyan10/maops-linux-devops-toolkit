@@ -16,16 +16,16 @@ setup() {
     [ "$status" -eq 0 ]
 }
 
-@test "maops --version shows 0.3.0" {
+@test "maops --version shows the current project version" {
     run "$MAOPS_BIN" --version
     [ "$status" -eq 0 ]
-    [[ "$output" == *"0.3.0"* ]]
+    [[ "$output" == *"$PROJECT_VERSION"* ]]
 }
 
-@test "maops version shows 0.3.0" {
+@test "maops version shows the current project version" {
     run "$MAOPS_BIN" version
     [ "$status" -eq 0 ]
-    [[ "$output" == *"0.3.0"* ]]
+    [[ "$output" == *"$PROJECT_VERSION"* ]]
 }
 
 @test "unknown group exits 2" {
@@ -137,4 +137,63 @@ setup() {
 @test "maops bogus report still exits 2 as an unknown top-level group" {
     run "$MAOPS_BIN" bogus report
     [ "$status" -eq 2 ]
+}
+
+# --- Day 5: config / doctor dispatch routes ---------------------------------
+
+@test "maops --help lists the config and doctor groups" {
+    run "$MAOPS_BIN" --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"config"* ]]
+    [[ "$output" == *"doctor"* ]]
+}
+
+@test "maops config with no subcommand exits 2" {
+    isolate_config_env
+    run "$MAOPS_BIN" config
+    [ "$status" -eq 2 ]
+}
+
+@test "maops config bogus exits 2 with an unknown-command message" {
+    isolate_config_env
+    run "$MAOPS_BIN" config bogus
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Unknown config command"* ]]
+}
+
+@test "maops config path dispatches to config-manager.sh" {
+    isolate_config_env
+    run "$MAOPS_BIN" config path
+    [ "$status" -eq 0 ]
+    [ "$output" = "$XDG_CONFIG_HOME/maops/config" ]
+}
+
+@test "maops config init --help dispatches and forwards --help" {
+    isolate_config_env
+    run "$MAOPS_BIN" config init --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Usage:"* ]]
+}
+
+@test "maops doctor dispatches to doctor.sh and forwards its exit code" {
+    isolate_config_env
+    stub_shadow_path_except
+    run "$REAL_BASH" "$MAOPS_BIN" doctor
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"MAOps Doctor"* ]]
+}
+
+@test "maops doctor --format json forwards the flag through the dispatcher" {
+    isolate_config_env
+    stub_shadow_path_except
+    run "$REAL_BASH" "$MAOPS_BIN" doctor --format json
+    [ "$status" -eq 0 ]
+    printf '%s' "$output" | python3 -c 'import json,sys; json.load(sys.stdin)'
+}
+
+@test "maops doctor --nonsense forwards doctor.sh's own usage error and exit code" {
+    isolate_config_env
+    run "$MAOPS_BIN" doctor --nonsense
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Unknown option"* ]]
 }

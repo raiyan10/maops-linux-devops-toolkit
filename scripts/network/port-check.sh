@@ -16,6 +16,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck source=scripts/common/bootstrap.sh
 source "$SCRIPT_DIR/../common/bootstrap.sh"
+# shellcheck source=scripts/common/config-file.sh
+source "$SCRIPT_DIR/../common/config-file.sh"
 
 HOST=""
 PORT=""
@@ -89,7 +91,7 @@ parse_args() {
 
     HOST="${positional[0]}"
     PORT="${positional[1]}"
-    TIMEOUT="${positional[2]:-$DEFAULT_TIMEOUT}"
+    TIMEOUT="${positional[2]:-$(config_resolve_value network_timeout "" MAOPS_NETWORK_TIMEOUT "$DEFAULT_TIMEOUT")}"
 
     validate_tcp_port "$PORT"
     validate_positive_integer "$TIMEOUT" "TIMEOUT"

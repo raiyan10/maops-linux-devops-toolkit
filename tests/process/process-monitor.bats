@@ -30,10 +30,10 @@ STUB
     [[ "$output" == *"Usage:"* ]]
 }
 
-@test "process-monitor.sh --version exits 0 and shows 0.3.0" {
+@test "process-monitor.sh --version exits 0 and shows the current project version" {
     run "$SCRIPT" --version
     [ "$status" -eq 0 ]
-    [[ "$output" == *"0.3.0"* ]]
+    [[ "$output" == *"$PROJECT_VERSION"* ]]
 }
 
 @test "process top with no arguments defaults to LIMIT=10 and sort=cpu" {
