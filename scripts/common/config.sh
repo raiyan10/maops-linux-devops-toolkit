@@ -5,7 +5,7 @@
 readonly MAOPS_CONFIG_LOADED=1
 
 readonly PROJECT_NAME="MAOps Linux DevOps Toolkit"
-readonly PROJECT_VERSION="0.3.0"
+readonly PROJECT_VERSION="0.4.0"
 readonly PROJECT_AUTHOR="Raiyan Yousuf"
 readonly PROJECT_LICENSE="MIT"
 

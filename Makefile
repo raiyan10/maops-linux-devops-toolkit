@@ -1,7 +1,11 @@
 SHELL := /usr/bin/env bash
 .SHELLFLAGS := -eu -o pipefail -c
 
-.PHONY: help validate lint check-executable quality test run cli-help clean
+PREFIX ?= $(HOME)/.local
+
+.PHONY: help validate lint check-executable quality test run cli-help \
+        config-init doctor install uninstall package verify-package \
+        smoke-install clean
 
 help:
 	@echo "MAOps Linux DevOps Toolkit"
@@ -14,7 +18,14 @@ help:
 	@echo "  quality           Run all quality checks (validate, lint, check-executable, test)"
 	@echo "  run               Run 'maops system info'"
 	@echo "  cli-help          Run 'maops --help'"
-	@echo "  clean             Remove generated temporary files"
+	@echo "  config-init       Run 'maops config init'"
+	@echo "  doctor            Run 'maops doctor'"
+	@echo "  install           Install to PREFIX (default: \$$HOME/.local)"
+	@echo "  uninstall         Uninstall from PREFIX (default: \$$HOME/.local)"
+	@echo "  package           Build dist/*.tar.gz and its .sha256 checksum"
+	@echo "  verify-package    Verify the current release package"
+	@echo "  smoke-install     Install/verify/uninstall against a temporary prefix"
+	@echo "  clean             Remove generated temporary files and dist/"
 
 validate:
 	@echo "Validating Bash syntax..."
@@ -61,6 +72,38 @@ run:
 cli-help:
 	@./bin/maops --help
 
+config-init:
+	@./bin/maops config init
+
+doctor:
+	@./bin/maops doctor
+
+install:
+	@./scripts/install/install.sh --prefix "$(PREFIX)"
+
+uninstall:
+	@./scripts/install/uninstall.sh --prefix "$(PREFIX)" --yes
+
+package:
+	@./scripts/release/package.sh
+
+verify-package:
+	@./scripts/release/verify-package.sh
+
+smoke-install:
+	@tmp="$$(mktemp -d)"; \
+	trap 'rm -rf -- "$$tmp"' EXIT; \
+	./scripts/install/install.sh --prefix "$$tmp"; \
+	"$$tmp/bin/maops" --version; \
+	"$$tmp/bin/maops" doctor; \
+	./scripts/install/uninstall.sh --prefix "$$tmp" --yes; \
+	if [[ -e "$$tmp/lib/maops" ]]; then \
+		echo "smoke-install: cleanup left files behind"; \
+		exit 1; \
+	fi; \
+	echo "smoke-install passed."
+
 clean:
 	@find . -type f \( -name '*.tmp' -o -name '*.log' \) -delete
-	@echo "Generated temporary files removed."
+	@rm -rf -- dist
+	@echo "Generated temporary files and dist/ removed."

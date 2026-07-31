@@ -58,10 +58,10 @@ STUB
     [[ "$output" == *"Usage:"* ]]
 }
 
-@test "service-status.sh --version exits 0 and shows 0.3.0" {
+@test "service-status.sh --version exits 0 and shows the current project version" {
     run "$SCRIPT" --version
     [ "$status" -eq 0 ]
-    [[ "$output" == *"0.3.0"* ]]
+    [[ "$output" == *"$PROJECT_VERSION"* ]]
 }
 
 @test "service status missing SERVICE exits 2" {

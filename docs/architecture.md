@@ -12,21 +12,26 @@ what is intentionally not built yet.
 ```text
 .
 ├── .claude              # Claude Code project guidance and Skills
-├── .github/workflows    # CI: make quality (syntax, ShellCheck, executable-mode, Bats)
+├── .github/workflows    # CI: make quality, package, verify-package, smoke-install
 ├── bin                  # maops — unified CLI dispatcher
 ├── docs                 # This documentation set, plus engineering reviews
 ├── scripts
 │   ├── common           # Shared library — no script in the other folders is
 │   │                    # meant to duplicate what lives here
+│   ├── config           # `maops config` subcommands (path/init/show/validate)
+│   ├── diagnostics      # `maops doctor` environment/health check
 │   ├── filesystem       # Disk usage, largest files, temp-file scanning
+│   ├── install          # User-local install/uninstall (staged, manifest-based)
 │   ├── monitoring       # CPU, memory, load-average reporting
 │   ├── network          # Network info, ping, DNS lookup, port checking
 │   ├── process          # Read-only top-N process reporting
+│   ├── release          # Release packaging and archive verification
 │   ├── service          # Read-only service status inspection
 │   ├── system           # Host identity and OS reporting
 │   └── users            # Read-only user account reporting
 ├── templates            # Boilerplate for generating new scripts/docs/workflows
 ├── tests                # Bats test suite
+├── dist                 # Generated release artifacts (gitignored, not tracked)
 ├── CHANGELOG.md / CONTRIBUTING.md / LICENSE / Makefile
 └── README.md
 ```
@@ -229,6 +234,17 @@ is what originally caught the release blocker recorded in
 `docs/engineering-reviews/day-02.md`, finding C1), and `test` (the Bats
 suite). Run `make quality` locally before pushing to reproduce CI exactly.
 
+After `make quality`, the same job runs `make package`, `make
+verify-package`, and `make smoke-install` (§15, §11) — building a release
+archive, verifying its checksum and contents, and running a full
+install/doctor/uninstall cycle against a temporary prefix — with `HOME`
+overridden to a runner-scoped temporary directory for the smoke-install step
+specifically, so it can never touch the runner's real home. `python3` is
+also installed alongside `shellcheck`/`bats`, since the config/doctor Bats
+suites validate JSON output with it. None of these steps publish or upload
+anything — they build and verify locally within the job — so no separate
+pull-request-vs-push conditional is needed.
+
 ---
 
 ## 7. Unified `maops` CLI
@@ -238,6 +254,35 @@ location via `BASH_SOURCE[0]` (working regardless of the caller's current
 directory), sources `scripts/common/bootstrap.sh` once, and then `exec`s
 straight into the appropriate leaf script — so the leaf script's own exit
 code becomes `maops`'s exit code, with no wrapper process left behind:
+
+**Symlink resolution.** Once installed (§11), `PREFIX/bin/maops` is a
+relative symlink to `../lib/maops/bin/maops`. A plain
+`SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"` resolves the
+*symlink's own* directory, not its target's — which would silently break
+every `exec "$REPO_ROOT/scripts/..."` dispatch once installed. `bin/maops`
+instead resolves its real path first, via a small bounded manual loop:
+
+```bash
+resolve_script_path() {
+    local target="${BASH_SOURCE[0]}"
+    local dir hops=0
+    while [[ -L "$target" ]]; do
+        hops=$((hops + 1))
+        ((hops > 40)) && { echo "too many levels of symbolic links" >&2; exit 1; }
+        dir="$(cd "$(dirname "$target")" && pwd)"
+        target="$(readlink "$target")"
+        [[ "$target" != /* ]] && target="$dir/$target"
+    done
+    cd "$(dirname "$target")" && pwd
+}
+```
+
+This deliberately avoids `readlink -f`/`realpath`: neither is a required
+runtime command (§14), and a manual bounded loop needs only `readlink`
+itself, which is already universally available. A non-symlink invocation
+(running directly from the source tree) never enters the `while [[ -L ]]`
+loop body, so this is a pure addition with no behavior change for the
+existing source-tree case.
 
 ```bash
 maops help | --help | -h        # global help
@@ -256,6 +301,8 @@ Dispatch table (`bin/maops`'s `dispatch_<group>()` functions):
 | `user` | `report` | `scripts/users/user-report.sh` |
 | `process` | `top` | `scripts/process/process-monitor.sh` |
 | `service` | `status` | `scripts/service/service-status.sh` |
+| `config` | `path` / `init` / `show` / `validate` | `scripts/config/config-manager.sh` |
+| `doctor` | *(no sub-action)* | `scripts/diagnostics/doctor.sh` |
 
 `user`, `process`, and `service` each have exactly one command today, but
 they still get their own `dispatch_<group>()` function rather than an inline
@@ -264,6 +311,17 @@ they still get their own `dispatch_<group>()` function rather than an inline
 whole mechanism, not per-group special-casing, so giving a single-command
 group its own function keeps every group uniform instead of forking `main()`
 into two different dispatch styles.
+
+`config` and `doctor` are dispatched slightly differently: both get their own
+`dispatch_config`/`dispatch_doctor` function and their own `case` arm in
+`main()`, but neither goes through the generic `"dispatch_$group" "$@"` path
+the other seven groups share, and neither gets the "missing command for
+group" pre-check that arm performs. `doctor` takes no sub-action at all
+(only flags), and `config`'s own subcommand validation is owned entirely by
+`config-manager.sh` — `bin/maops` stays a pure passthrough
+(`exec "$REPO_ROOT/scripts/config/config-manager.sh" "$@"` /
+`exec "$REPO_ROOT/scripts/diagnostics/doctor.sh" "$@"`) rather than
+duplicating validation logic the leaf script already owns.
 
 **Exit-code split**: `maops` itself only ever returns exit code `2` for its
 *own* usage errors — no command given, an unknown group, or an unknown
@@ -436,3 +494,253 @@ executable-mode gotcha recorded in
 See
 [best-practices.md §14](best-practices.md#14-deterministic-path-based-test-stubs)
 for the full convention and its guardrails.
+
+---
+
+## 11. Installation and Runtime Layout
+
+`scripts/install/install.sh`/`uninstall.sh` install the toolkit into a
+**user-local prefix** — `$HOME/.local` by default, never system-wide, never
+`sudo` — as:
+
+```text
+PREFIX/bin/maops                  -> ../lib/maops/bin/maops   (relative symlink)
+PREFIX/lib/maops/bin/maops
+PREFIX/lib/maops/scripts/
+PREFIX/lib/maops/LICENSE
+PREFIX/lib/maops/CHANGELOG.md
+PREFIX/lib/maops/.install-manifest
+```
+
+**Shared file list.** Both `install.sh` and `scripts/release/package.sh`
+(§15) copy from the exact same array, `scripts/common/release-files.sh`'s
+`RELEASE_FILE_LIST` (`bin/maops`, `scripts/`, `templates/script-template.sh`,
+`README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `LICENSE`, `Makefile`,
+`.gitattributes`), so the installed tree and the released tarball can never
+drift apart. `install.sh` does not depend on `git`, so it works identically
+whether run from a git checkout or an extracted release tarball — it
+resolves its own location the same way `bin/maops` does (§7) and copies
+relative to that.
+
+**Staged, then swapped atomically.** The runtime tree is built in a
+`mktemp -d` staging directory created *under `PREFIX/lib`* — the same
+filesystem as the final destination, so the swap into place is a same-
+filesystem `mv` (a rename) rather than a cross-device copy-then-unlink.
+On an upgrade, the previous tree is renamed aside, the staging directory is
+renamed into place, and only then is the previous tree removed — bounding
+the "no working install" window to two rename syscalls rather than the
+whole copy.
+
+**Install manifest** (`.install-manifest`): a header (`MAOPS_INSTALL_VERSION`,
+`MAOPS_INSTALL_PREFIX`, `MAOPS_INSTALL_DATE`) followed by `--- files ---` and
+one absolute installed path per line. It is parsed with a plain `read -r`
+loop, never sourced or eval'd. `uninstall.sh` treats the manifest as the
+sole authority for what it's allowed to remove:
+
+- No manifest at the resolved prefix → nothing to do, exit `0` (idempotent).
+- The manifest's recorded prefix must match the resolved `--prefix` exactly,
+  or uninstall refuses outright — this is what stops uninstall from acting
+  on a manifest copied from elsewhere or a prefix that merely happens to
+  contain a `lib/maops` directory.
+- Every path removal is checked against `"$resolved_prefix"/*` before
+  `rm -f --` runs; a manifest entry outside the resolved prefix aborts the
+  whole run rather than being skipped. There is no `rm -rf` on the prefix
+  itself, or on any directory derived from raw user input — only
+  `rm -f --` on individual manifest-listed files, then `rmdir --` on now-empty
+  directories in reverse-depth order (via `find -depth`, which visits a
+  directory's contents before the directory itself).
+
+**Safety guards, with no override:**
+
+- An unrelated regular file (or a symlink pointing elsewhere) found at
+  `PREFIX/bin/maops` is never overwritten — **`--force` does not override
+  this refusal.** `--force` only ever permits replacing a *verified* prior
+  MAOps install (an existing, prefix-matching manifest).
+- Empty prefix or the resolved filesystem root (`/`) is rejected with exit
+  `2`, checked *after* canonicalization (`cd ... && pwd -P`) so a symlink
+  pointing at `/` can't slip past a naive string comparison of the raw
+  argument.
+- Uninstall requires `--yes` for non-interactive removal, or an interactive
+  `y`/`N` confirmation.
+- Configuration (§12) lives at `${XDG_CONFIG_HOME:-$HOME/.config}/maops`,
+  structurally outside `PREFIX` — it is preserved automatically by both
+  install and uninstall, since nothing under `PREFIX` ever references it.
+  `--purge-config` is the one explicit, separate code path that touches it.
+- Every mutating command (`mkdir -p --`, `mv --`, `ln -sfn --`, `rm -f --`)
+  quotes its path arguments and uses a `--` end-of-options marker, so a
+  prefix value starting with `-` (or containing spaces or shell
+  metacharacters) is always treated as a literal path, never as a flag or
+  re-parsed shell syntax. Neither script uses `eval` or `bash -c` with an
+  interpolated path anywhere.
+
+**Execution-mode detection** (used by `doctor`, §14): a script under
+`scripts/` checks for `.install-manifest` alongside its own resolved repo
+root — present means "installed," absent means "running from a source
+checkout." This is a read-only presence check, not a mutation.
+
+See `tests/install/install.bats` for the regression coverage of every guard
+above, and `.claude/agents/release-engineer.md`'s review focus for the
+threat model this design was checked against.
+
+---
+
+## 12. Configuration System
+
+`scripts/common/config-file.sh` implements parsing, validation, precedence
+resolution, and atomic writes for a plain-text config file at:
+
+```text
+${MAOPS_CONFIG_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/maops/config}
+```
+
+Supported keys: `output_format` (`text`/`json`), `process_limit`,
+`ping_count`, `network_timeout` (the latter three: positive integers).
+
+**Never sourced or eval'd.** The file is read exclusively via a
+`while IFS= read -r line` loop; one regex
+(`^([a-z_][a-z0-9_]*)[[:space:]]*=(.*)$`) both classifies a line (`blank` /
+`comment` / `kv` / `malformed`) and extracts its key/value via
+`BASH_REMATCH`, so there is no risk of a separate classifier and extractor
+disagreeing. Per-key value validation reuses `scripts/common/cli.sh`'s
+existing `is_one_of` (for `output_format`) and `is_positive_integer` (for the
+three numeric keys) rather than duplicating regex logic. Because the file is
+never sourced, a value containing command substitution or shell
+metacharacters (e.g. `process_limit=$(rm -rf /)`) is inert text that simply
+fails the positive-integer regex — it is never at any point handed to
+anything that would expand it.
+
+`config validate` (strict mode) rejects unknown keys, duplicate keys, and
+malformed lines outright. `config_load` (used internally by the precedence
+resolver below) is deliberately more permissive — it silently skips a bad
+line rather than crashing a leaf script over a stray line in the user's
+config file, on the principle that `config validate` is the dedicated place
+to be strict.
+
+**Precedence resolution** is implemented exactly once, as
+`config_resolve_value KEY CLI_VALUE ENV_VAR_NAME DEFAULT`:
+
+```text
+explicit CLI argument  >  MAOPS_* environment variable  >  config file  >  built-in default
+```
+
+Every consumer — `config show`, `doctor`, and the three leaf scripts below —
+calls this same function, so precedence logic cannot drift between call
+sites. `process-monitor.sh`'s default `LIMIT`, `ping-check.sh`'s default
+`COUNT`, and `port-check.sh`'s default `TIMEOUT` each changed from a bare
+`readonly DEFAULT_*` fallback to
+`"${positional[0]:-$(config_resolve_value ... "$DEFAULT_*")}"` — the
+explicit positional argument, when given, is checked first and always wins;
+the resolver is only ever consulted as the fallback value.
+
+**Atomic writes.** `config_write_atomic` creates a temp file with `mktemp`
+in the *same directory* as the target (guaranteeing a same-filesystem,
+atomic `mv`), then renames it into place. `config init` sets `umask 077`
+before calling it and refuses to overwrite an existing file without
+`--force`.
+
+**CLI routes** (`scripts/config/config-manager.sh`, dispatched as
+`maops config <subcommand>`): `path` (prints the resolved path), `init
+[--force]`, `show [--format text|json]`, `validate [PATH]` (0 valid / 1
+invalid; a missing PATH is also 1, since it's a problem with the config
+*content* being pointed at, not the command's own argument shape — argument-
+shape errors, like an invalid `--format` value, are exit `2`).
+
+---
+
+## 13. Structured Output (JSON) Scope
+
+`scripts/common/format.sh` provides `json_escape` (backslash → quote → tab →
+carriage-return → newline, in that order — backslashes first, or the later
+substitutions would double-escape the backslashes they themselves introduce),
+`json_kv KEY VALUE [--raw]`, and a flat-object convenience wrapper,
+`json_object`. No `eval`, no runtime `jq` dependency — JSON is assembled
+entirely through `printf` and parameter expansion.
+
+**Scope for v0.4.0 is deliberately narrow**: only `maops config show
+--format json` and `maops doctor --format json` produce JSON. No other leaf
+command gained a `--format` flag in this release. Both commands print
+exactly one JSON document per invocation and skip `log_info`/`show_header`
+entirely in JSON mode, so there is never a stray line before or after the
+document — a hard requirement for piping into `python3 -m json.tool` or a
+downstream `jq`/monitoring consumer.
+
+`doctor`'s JSON shape composes an array of check objects by hand (joining
+several `json_kv`-built fragments with `,` and wrapping in `[...]`) rather
+than extending `format.sh` with array/nesting support nobody else needs yet —
+`format.sh` itself stays a small, trivially-testable set of string-escaping
+and flat-object primitives.
+
+---
+
+## 14. Doctor Command
+
+`scripts/diagnostics/doctor.sh` (`maops doctor [--format text|json]`) runs a
+fixed set of checks, each contributing to the overall exit code only if
+marked required:
+
+| Check | Required? |
+|---|---|
+| Toolkit version, execution mode, config path | info only |
+| Operating system is Linux | required |
+| Bash version ≥ 4 | required |
+| Config file exists | **warning only** — normal on a fresh install/checkout |
+| Config file is valid (only evaluated if it exists) | required if present-but-invalid |
+| Required runtime commands: `bash awk find sort ps getent ip ping timeout df free lscpu uptime` | required, one check per command |
+| Service manager: `systemctl` **or** `service` | required (either/or — mirrors `service-status.sh`'s own systemd-vs-fallback detection, §9; not both hard-required) |
+| Optional dev tools: `git make shellcheck bats python3` | **warning only**, never fails |
+
+Every check resolves commands via `command -v` (`command_exists`, from
+`helpers.sh`) only — doctor never actually invokes `ping`, `ip`, `timeout`,
+or any other roster command against a real target, so it makes no network
+requests and never modifies the system. `main()` builds the complete check
+list first, prints exactly once (text or a single JSON document), and only
+then computes the exit code — so a required failure can never truncate the
+JSON document mid-stream; a failing check is just another array element with
+`"status":"fail"`.
+
+Exit `1` only if a **required** check fails; exit `0` otherwise. Missing
+optional dev tools and a missing (as opposed to invalid) config file are
+always warnings.
+
+---
+
+## 15. Packaging and Release Verification
+
+`scripts/release/package.sh` builds `dist/maops-linux-devops-toolkit-<version>.tar.gz`
+and a sibling `.sha256` checksum from the current git checkout:
+
+- Copies exactly `scripts/common/release-files.sh`'s `RELEASE_FILE_LIST`
+  (the same list `install.sh` uses, §11) into a staging directory. A
+  directory entry (e.g. `scripts`) is expanded via `git ls-files`, not a raw
+  recursive copy, so a stray untracked temp or editor file left inside it is
+  never silently packaged.
+- Builds the tarball with `tar --sort=name --mtime="@0" --owner=0 --group=0
+  --numeric-owner`, piped through `gzip -n` (rather than relying on `tar -z`
+  to suppress gzip's own header timestamp) — repeated builds from an
+  unchanged tree are byte-for-byte identical.
+- The archive contains exactly one top-level directory,
+  `maops-linux-devops-toolkit-<version>/`.
+- Requires a git checkout (`git rev-parse --is-inside-work-tree`) — packaging
+  is a release-time operation distinct from `install.sh`, which must also
+  work from an already-extracted tarball with no `.git` present.
+
+`scripts/release/verify-package.sh` checks, strictly in this order:
+
+1. **Checksum** (`sha256sum -c`) — fails loudly on any modification.
+2. **Archive member safety, before any extraction**: every member name is
+   checked for an absolute path, a literal `..` path segment (checked
+   component-by-component via a `/`-split loop, not a substring match, so a
+   legitimate filename like `v1.2..3` is never a false positive), or a name
+   outside the single expected `maops-linux-devops-toolkit-<version>/`
+   top-level directory. Any violation aborts before `tar -xzf` ever runs.
+3. **Required paths** — only after step 2 passes, the archive is extracted
+   to a `mktemp -d` scratch directory (cleaned up via an `EXIT` trap) and a
+   fixed checklist of paths (`bin/maops`, `scripts/common/bootstrap.sh`,
+   `LICENSE`, `Makefile`, etc.) is confirmed present.
+
+Neither script uses `sudo`, `eval`, or `jq`. `make package`/`make
+verify-package`/`make smoke-install` are separate from `make quality` (they
+touch the filesystem more heavily and, for packaging, require `git`) but are
+run in CI immediately after `make quality` (§6), so a release-readiness
+regression is caught on every push and pull request, not only when a
+maintainer remembers to run them locally.

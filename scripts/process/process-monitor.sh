@@ -16,6 +16,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck source=scripts/common/bootstrap.sh
 source "$SCRIPT_DIR/../common/bootstrap.sh"
+# shellcheck source=scripts/common/config-file.sh
+source "$SCRIPT_DIR/../common/config-file.sh"
 
 readonly DEFAULT_PROCESS_LIMIT=10
 readonly DEFAULT_PROCESS_SORT="cpu"
@@ -85,7 +87,7 @@ parse_args() {
         esac
     done
 
-    LIMIT="${positional[0]:-$DEFAULT_PROCESS_LIMIT}"
+    LIMIT="${positional[0]:-$(config_resolve_value process_limit "" MAOPS_PROCESS_LIMIT "$DEFAULT_PROCESS_LIMIT")}"
     SORT_MODE="${positional[1]:-$DEFAULT_PROCESS_SORT}"
 
     validate_positive_integer "$LIMIT" "LIMIT"

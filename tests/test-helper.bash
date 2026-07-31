@@ -12,6 +12,12 @@ REPO_ROOT="$(cd "$TEST_HELPER_DIR/.." && pwd)"
 
 export MAOPS_BIN="$REPO_ROOT/bin/maops"
 
+# Read once from the single source of truth so version-string assertions
+# never need hand-editing on the next version bump.
+# shellcheck source=scripts/common/config.sh
+source "$REPO_ROOT/scripts/common/config.sh"
+export PROJECT_VERSION
+
 # --- Deterministic PATH-based command stubs --------------------------------
 #
 # Some Day 4 scripts (user-report.sh, process-monitor.sh, service-status.sh)
@@ -44,4 +50,65 @@ stub_command() {
         cat
     } >"$STUB_DIR/$name"
     chmod 755 "$STUB_DIR/$name"
+}
+
+# --- Configuration-system isolation ------------------------------------------
+#
+# Config/doctor tests must never read or write the real user's ~/.config.
+# isolate_config_env points HOME and XDG_CONFIG_HOME at fresh directories
+# under $BATS_TEST_TMPDIR and clears every MAOPS_* override, so each test
+# starts from a known, empty configuration state.
+
+isolate_config_env() {
+    export HOME="$BATS_TEST_TMPDIR/home"
+    export XDG_CONFIG_HOME="$BATS_TEST_TMPDIR/xdg-config"
+    mkdir -p "$HOME" "$XDG_CONFIG_HOME"
+    unset MAOPS_CONFIG_FILE MAOPS_OUTPUT_FORMAT MAOPS_PROCESS_LIMIT MAOPS_PING_COUNT MAOPS_NETWORK_TIMEOUT
+}
+
+# --- Doctor "missing command" shadow PATH -----------------------------------
+#
+# doctor.sh reports a command as present/missing via `command -v`, so
+# testing "missing" deterministically requires a PATH that genuinely lacks
+# the command being tested — not just a stub prepended ahead of the real
+# PATH (stub_bin_init above), since the real binary would still be found
+# further down PATH. stub_shadow_path_except rebuilds PATH from scratch as
+# a directory of thin passthrough wrappers for every command doctor.sh (and
+# its sourced library chain) might invoke, omitting only the command(s)
+# named as arguments.
+#
+# Wrapper shebangs use the real bash's own absolute path, never
+# `/usr/bin/env bash`: with PATH fully replaced, an env-based shebang would
+# have to resolve "bash" via the very same restricted PATH, and if that
+# lookup found this shadow directory's own "bash" wrapper (also shebanged
+# with `/usr/bin/env bash`), it would recurse into itself indefinitely.
+# `bash` is deliberately included in the roster like any other command (so
+# a "healthy" shadow reports it present) — the absolute-path shebang makes
+# this safe.
+DOCTOR_SHADOW_ROSTER=(
+    bash awk find sort ps getent ip ping timeout df free lscpu uptime
+    systemctl service git make shellcheck bats python3
+    uname date dirname basename cat mkdir mktemp mv tr grep sed head tail wc stat rm cp chmod
+)
+
+stub_shadow_path_except() {
+    local omit=("$@")
+    REAL_BASH="$(command -v bash)"
+    SHADOW_DIR="$BATS_TEST_TMPDIR/shadow"
+    mkdir -p "$SHADOW_DIR"
+
+    local cmd real skip o
+    for cmd in "${DOCTOR_SHADOW_ROSTER[@]}"; do
+        skip=0
+        for o in "${omit[@]}"; do
+            [[ "$cmd" == "$o" ]] && skip=1
+        done
+        ((skip)) && continue
+
+        real="$(command -v "$cmd" 2>/dev/null)" || continue
+        printf '#!%s\nexec "%s" "$@"\n' "$REAL_BASH" "$real" >"$SHADOW_DIR/$cmd"
+        chmod 755 "$SHADOW_DIR/$cmd"
+    done
+
+    PATH="$SHADOW_DIR"
 }

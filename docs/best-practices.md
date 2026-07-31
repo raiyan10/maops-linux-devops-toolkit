@@ -550,3 +550,133 @@ and the bus error's stderr is captured and shown rather than discarded). The
 same discipline applies to `service`'s fallback exit codes (§13): an exit
 code outside the known LSB set (`0`, `3`, `4`) is reported as an explicit
 lookup failure, never silently treated as "stopped."
+
+## 16. Manifest-Based Install/Uninstall Safety
+
+`scripts/install/install.sh`/`uninstall.sh` (full design in
+[architecture.md §11](architecture.md#11-installation-and-runtime-layout))
+establish a discipline not needed anywhere else in this codebase until now:
+every other script only ever reads paths or writes to a handful of
+well-known, fixed locations, but the installer takes a user-supplied
+directory (`--prefix`) as an argument to genuinely mutating operations
+(`mkdir`, `mv`, `ln`, `rm`). Three rules make that safe:
+
+**Never `rm -rf` a variable — only ever a manifest-verified file list.**
+Uninstall's removal loop is:
+
+```bash
+for path in "${MANIFEST_FILES[@]}"; do
+    case "$path" in
+        "$PREFIX"/*) : ;;
+        *) log_error "Refusing to remove out-of-prefix path: $path"; exit 1 ;;
+    esac
+    [[ -e "$path" || -L "$path" ]] && rm -f -- "$path"
+done
+```
+
+Every path is checked against the resolved prefix *before* removal, and
+removal is always `rm -f --` on one file at a time — never `rm -rf` on a
+directory built from `$PREFIX` or any other variable. Empty directories are
+cleaned up afterward with plain `rmdir --` (which fails loudly, not
+silently, if a directory turns out to be unexpectedly non-empty), not
+`rm -rf`.
+
+**Quote every path, and use `--` before it in every mutating command.** A
+prefix value starting with `-` must never be misread as a flag:
+
+```bash
+mkdir -p -- "$staging"
+mv -- "$staging" "$LIB_DIR"
+ln -sfn -- "../lib/maops/bin/maops" "$LAUNCHER"
+rm -f -- "$path"
+```
+
+**Never `eval`, never `bash -c` with an interpolated path.** A prefix
+containing `;`, `$(...)`, or backticks is always inert — it is only ever
+used as a literal argv element, never handed to something that would
+re-parse it as shell syntax. This is the same discipline established for
+`port-check.sh`'s `HOST` argument in §11, extended here to a value that
+additionally drives filesystem mutation, not just a network call.
+
+**Symlink verification without `realpath`.** Two situations need to know
+whether a symlink at a fixed path resolves to a specific expected target —
+install's "is the unrelated-file-at-launcher guard actually looking at our
+own prior symlink" check, and uninstall's "does this launcher belong to
+this install" check. Both resolve a possibly-relative symlink target
+against the symlink's *own* directory (never the caller's `$PWD`), without
+shelling out to `readlink -f`/`realpath` (neither is a required runtime
+command):
+
+```bash
+dir="$(cd -- "$(dirname -- "$link")" && pwd)"
+target="$(readlink -- "$link")"
+[[ "$target" == /* ]] || target="$dir/$target"
+```
+
+## 17. Config File Parsing Without `eval` or `source`
+
+`scripts/common/config-file.sh` ([architecture.md §12](architecture.md#12-configuration-system))
+parses a user-editable file that this project's threat model explicitly
+calls out as untrusted input: a value could contain command substitution or
+shell metacharacters, whether by an operator's mistake or deliberately. The
+file is therefore never `source`d and never passed to `eval` — it is read
+exclusively via:
+
+```bash
+while IFS= read -r line || [[ -n "$line" ]]; do
+    ...
+done <"$path"
+```
+
+Line classification and key/value extraction share **one** regex
+(`^([a-z_][a-z0-9_]*)[[:space:]]*=(.*)$`), matched once per line with
+`BASH_REMATCH` capturing both groups — not a classifier regex and a separate
+`cut`/`awk`-based extractor, which could disagree on what counts as a valid
+line. Because a value is only ever compared against a validator regex
+(`is_one_of` for `output_format`, `is_positive_integer` for the numeric
+keys) and never expanded or executed, a value like
+`process_limit=$(touch /tmp/pwned)` simply fails `is_positive_integer` — the
+`$(...)` never has a chance to run. `tests/config/config-manager.bats`
+proves this both ways: the malicious value is rejected *and* the command it
+contains is never actually invoked (verified via a stubbed, call-logging
+replacement for the command it tries to run).
+
+A static regression test (mirroring the existing "no eval" check for
+`service-status.sh`, §13) greps `config-file.sh` itself for `eval`, `source`,
+`bash -c`, and `sh -c`, excluding comment lines (so prose describing this
+very guarantee doesn't false-positive against itself).
+
+## 18. Hand-Rolled JSON Without `eval` or `jq`
+
+`scripts/common/format.sh` ([architecture.md §13](architecture.md#13-structured-output-json-scope))
+assembles JSON with `printf` and parameter expansion only — no `eval`, and
+no runtime dependency on `jq` (a requirement carried over from the project's
+"minimal, well-known dependencies only" principle already applied
+throughout §8's tool choices).
+
+`json_escape` performs five substitutions in a fixed order — backslash
+first, then double quote, then tab/CR/newline:
+
+```bash
+s="${s//\\/\\\\}"     # backslash MUST come first
+s="${s//\"/\\\"}"
+s="${s//$'\t'/\\t}"
+s="${s//$'\r'/\\r}"
+s="${s//$'\n'/\\n}"
+```
+
+Escaping backslashes first is not a stylistic choice: if quote-escaping ran
+first, its own inserted backslashes would then get double-escaped by the
+backslash substitution running second. `json_kv KEY VALUE [--raw]` wraps a
+single field, with `--raw` for values that must appear unquoted in the
+output (numbers, booleans) rather than as an escaped string; `json_object`
+is a thin convenience wrapper for the common flat, all-string case.
+
+Both JSON-emitting commands (`config show --format json`, `doctor --format
+json`) print exactly one complete document and suppress `log_info`/
+`show_header` entirely in JSON mode — a stray line before or after the
+document would break any consumer piping into `python3 -m json.tool` or
+`jq`. `doctor`'s array-of-checks shape is composed by joining several
+`json_kv`-built fragments with `,` in the caller, rather than teaching
+`format.sh` a general array/nesting API — keeping the shared library itself
+small and easy to verify by inspection.

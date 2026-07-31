@@ -11,7 +11,31 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolves this script's real location by following symlinks manually
+# (bounded, to guard against a cycle), so an installed launcher symlinked as
+# PREFIX/bin/maops -> ../lib/maops/bin/maops still finds its real REPO_ROOT.
+# Deliberately avoids `readlink -f`/`realpath`, since neither is guaranteed
+# to be present and neither is on the toolkit's required-command list.
+resolve_script_path() {
+    local target="${BASH_SOURCE[0]}"
+    local dir hops=0
+
+    while [[ -L "$target" ]]; do
+        hops=$((hops + 1))
+        if ((hops > 40)); then
+            echo "maops: too many levels of symbolic links: ${BASH_SOURCE[0]}" >&2
+            exit 1
+        fi
+
+        dir="$(cd "$(dirname "$target")" && pwd)"
+        target="$(readlink "$target")"
+        [[ "$target" != /* ]] && target="$dir/$target"
+    done
+
+    cd "$(dirname "$target")" && pwd
+}
+
+SCRIPT_DIR="$(resolve_script_path)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # shellcheck source=scripts/common/bootstrap.sh
@@ -38,6 +62,8 @@ Groups and commands:
     user        report [USERNAME]
     process     top [LIMIT] [cpu|memory]
     service     status SERVICE
+    config      path | init [--force] | show [--format text|json] | validate [PATH]
+    doctor      [--format text|json]
 
 Examples:
     maops system info
@@ -47,6 +73,8 @@ Examples:
     maops user report
     maops process top 15 memory
     maops service status cron
+    maops config init
+    maops doctor
 EOF
 }
 
@@ -143,6 +171,18 @@ dispatch_service() {
     esac
 }
 
+# config and doctor own their own subcommand/flag parsing (config-manager.sh
+# and doctor.sh respectively), so — unlike the groups above — these are
+# simple passthroughs with no "missing command for group" pre-check and no
+# per-action case statement here.
+dispatch_config() {
+    exec "$REPO_ROOT/scripts/config/config-manager.sh" "$@"
+}
+
+dispatch_doctor() {
+    exec "$REPO_ROOT/scripts/diagnostics/doctor.sh" "$@"
+}
+
 ###############################################################################
 # Main
 ###############################################################################
@@ -174,8 +214,18 @@ main() {
             "dispatch_$group" "$@"
             ;;
 
+        config)
+            shift
+            dispatch_config "$@"
+            ;;
+
+        doctor)
+            shift
+            dispatch_doctor "$@"
+            ;;
+
         *)
-            usage_error "Unknown command or group: $1 (expected: help, version, system, monitoring, filesystem, network, user, process, service)"
+            usage_error "Unknown command or group: $1 (expected: help, version, system, monitoring, filesystem, network, user, process, service, config, doctor)"
             ;;
     esac
 }

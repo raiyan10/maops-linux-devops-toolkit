@@ -69,10 +69,10 @@ STUB
     [[ "$output" == *"Usage:"* ]]
 }
 
-@test "user-report.sh --version exits 0 and shows 0.3.0" {
+@test "user-report.sh --version exits 0 and shows the current project version" {
     run "$SCRIPT" --version
     [ "$status" -eq 0 ]
-    [[ "$output" == *"0.3.0"* ]]
+    [[ "$output" == *"$PROJECT_VERSION"* ]]
 }
 
 @test "user report with no USERNAME resolves the current effective user via id -un" {

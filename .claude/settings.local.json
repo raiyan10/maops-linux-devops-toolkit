@@ -122,7 +122,17 @@
       "Bash(bin/maops service *)",
       "Bash(bin/maops bogus *)",
       "Bash(bin/maops)",
-      "Bash(rm -f /tmp/pwned_test /tmp/pwned_proc /tmp/pwned_svc)"
+      "Bash(rm -f /tmp/pwned_test /tmp/pwned_proc /tmp/pwned_svc)",
+      "Bash(tee /tmp/claude-1000/-mnt-f-DevOps-Portfolio-maops-linux-devops-toolkit/0006e2dc-4c85-4014-bb89-fcc292426a3c/scratchpad/quality.log)",
+      "Bash(make package *)",
+      "Bash(make verify-package *)",
+      "Bash(make smoke-install *)",
+      "Bash(tar -tzf dist/*.tar.gz)",
+      "Bash(awk '$1 ~ /^120/ {print}')",
+      "Bash(mkdir -p /tmp/claude-1000/-mnt-f-DevOps-Portfolio-maops-linux-devops-toolkit/0006e2dc-4c85-4014-bb89-fcc292426a3c/scratchpad/permcheck)",
+      "Bash(tar -tvzf dist/*.tar.gz)",
+      "Bash(grep -E 'bin/maops$|config-manager.sh$|README.md$')",
+      "Bash(awk -F: '{sum+=$2; print} END {print \"TOTAL:\", sum}')"
     ]
   }
 }

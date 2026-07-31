@@ -87,13 +87,24 @@ This repository is part of the **MAOps Technologies Engineering Portfolio**.
 │   │   ├── cli.sh
 │   │   ├── colors.sh
 │   │   ├── config.sh
+│   │   ├── config-file.sh
+│   │   ├── format.sh
 │   │   ├── helpers.sh
 │   │   ├── logger.sh
-│   │   └── output.sh
+│   │   ├── output.sh
+│   │   └── release-files.sh
+│   ├── config
+│   │   └── config-manager.sh
+│   ├── diagnostics
+│   │   └── doctor.sh
 │   ├── filesystem
 │   │   ├── cleanup-temp.sh
 │   │   ├── disk-usage.sh
 │   │   └── largest-files.sh
+│   ├── install
+│   │   ├── install.sh
+│   │   ├── lib.sh
+│   │   └── uninstall.sh
 │   ├── monitoring
 │   │   ├── cpu-monitor.sh
 │   │   ├── load-average.sh
@@ -105,6 +116,9 @@ This repository is part of the **MAOps Technologies Engineering Portfolio**.
 │   │   └── port-check.sh
 │   ├── process
 │   │   └── process-monitor.sh
+│   ├── release
+│   │   ├── package.sh
+│   │   └── verify-package.sh
 │   ├── service
 │   │   └── service-status.sh
 │   ├── system
@@ -123,10 +137,18 @@ This repository is part of the **MAOps Technologies Engineering Portfolio**.
 │   │   └── maops.bats
 │   ├── common
 │   │   └── helpers.bats
+│   ├── config
+│   │   └── config-manager.bats
+│   ├── diagnostics
+│   │   └── doctor.bats
+│   ├── install
+│   │   └── install.bats
 │   ├── network
 │   │   └── network-tools.bats
 │   ├── process
 │   │   └── process-monitor.bats
+│   ├── release
+│   │   └── package.bats
 │   ├── service
 │   │   └── service-status.bats
 │   ├── users
@@ -140,6 +162,8 @@ This repository is part of the **MAOps Technologies Engineering Portfolio**.
 ├── Makefile
 └── README.md
 ```
+
+`dist/` (generated release artifacts from `make package`) is gitignored and intentionally not shown above.
 
 ---
 
@@ -184,6 +208,19 @@ This repository is part of the **MAOps Technologies Engineering Portfolio**.
 
 - [x] Service Status (read-only; `systemctl` with a `service(8)` fallback) — `service-status.sh`
 
+### Configuration (`scripts/config`, `scripts/common/config-file.sh`)
+
+- [x] Config path/init/show/validate, with CLI-argument → `MAOPS_*` env var → config-file → built-in-default precedence — `config-manager.sh`
+
+### Diagnostics (`scripts/diagnostics`)
+
+- [x] Environment/health check — toolkit version, execution mode, OS, Bash version, config state, required/optional command availability (read-only, no network calls) — `doctor.sh`
+
+### Installation and Packaging (`scripts/install`, `scripts/release`)
+
+- [x] User-local install/uninstall with a staged, manifest-based runtime tree — `install.sh`, `uninstall.sh`
+- [x] Reproducible release tarball plus SHA-256 checksum verification — `package.sh`, `verify-package.sh`
+
 All utilities above are also reachable through the unified [`maops` CLI](#cli-usage) at `bin/maops`.
 
 ## Planned
@@ -225,9 +262,69 @@ maops process top 5 cpu
 maops process top 15 memory
 
 maops service status cron
+
+maops config path
+maops config init
+maops config show
+maops config show --format json
+
+maops doctor
+maops doctor --format json
 ```
 
 Unknown groups or commands print an actionable error and exit with status `2`. Every dispatched command exits with that underlying script's own exit code.
+
+---
+
+# Installation
+
+`maops` defaults to a **user-local** install — never `sudo`, never system-wide by default:
+
+```bash
+make install                       # installs to $HOME/.local
+make install PREFIX=/opt/maops     # or any custom prefix
+make uninstall                     # removes it again
+```
+
+Default layout under `PREFIX` (`$HOME/.local` unless overridden):
+
+```text
+PREFIX/bin/maops                  -> ../lib/maops/bin/maops   (relative symlink)
+PREFIX/lib/maops/bin/maops
+PREFIX/lib/maops/scripts/
+PREFIX/lib/maops/LICENSE
+PREFIX/lib/maops/CHANGELOG.md
+PREFIX/lib/maops/.install-manifest
+```
+
+Install stages the whole runtime tree in a temporary directory under `PREFIX/lib` before ever replacing anything, refuses to overwrite an unrelated file it finds at `PREFIX/bin/maops` (even with `--force`), and records every installed path in `.install-manifest` so `uninstall.sh` only ever removes files it verifiably owns. Re-running install over an existing MAOps installation requires `--force`; your configuration file (outside `PREFIX` entirely) is untouched by both install and uninstall unless you pass `--purge-config` to uninstall. See [docs/architecture.md §11](docs/architecture.md#11-installation-and-runtime-layout) for the full design and threat model.
+
+---
+
+# Configuration
+
+Config lives at `${MAOPS_CONFIG_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/maops/config}` — a plain `key=value` text file, never sourced or evaluated as Bash:
+
+```bash
+maops config init            # create a default config file
+maops config show            # show effective values (after precedence)
+maops config validate        # validate the resolved config file
+```
+
+Supported keys: `output_format` (`text`/`json`), `process_limit`, `ping_count`, `network_timeout`. Precedence for every value is **explicit CLI argument → `MAOPS_*` environment variable → config file → built-in default**. See [docs/architecture.md §12](docs/architecture.md#12-configuration-system) for the parsing/validation rules and [docs/troubleshooting.md](docs/troubleshooting.md) for common config-rejection causes.
+
+---
+
+# Doctor
+
+`maops doctor` reports toolkit version, source-tree-vs-installed execution mode, OS, Bash version, config state, and the availability of every required runtime command and optional development tool — read-only, no network calls:
+
+```bash
+maops doctor
+maops doctor --format json | python3 -m json.tool
+```
+
+Exits `0` when every required check passes, `1` if a required command or an existing-but-invalid config fails. Missing optional development tools (`git`, `make`, `shellcheck`, `bats`, `python3`) are warnings, never failures. See [docs/architecture.md §14](docs/architecture.md#14-doctor-command) for the full check list.
 
 ---
 
@@ -288,6 +385,14 @@ make quality   # syntax validation + ShellCheck + executable-mode check + Bats
 
 Individual files can also be run directly, e.g. `bats tests/cli/maops.bats`.
 
+Release and install-specific checks are separate, filesystem-heavier targets not folded into `make quality`:
+
+```bash
+make package         # build dist/*.tar.gz and its .sha256 checksum
+make verify-package  # verify the checksum and archive integrity
+make smoke-install   # install to a temporary prefix, run the CLI + doctor, then uninstall
+```
+
 ---
 
 # Engineering Principles
@@ -333,7 +438,9 @@ This project follows:
 - [x] Network utilities
 - [x] Bats automated tests
 - [x] User, process, and service utilities
-- [ ] Installation and packaging
+- [x] Configuration system with precedence resolution and JSON output
+- [x] Doctor diagnostic command
+- [x] Installation and packaging
 - [ ] Architecture diagrams
 - [ ] Medium technical article
 
