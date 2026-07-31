@@ -12,6 +12,7 @@ Required tools:
 - Git
 - GNU coreutils
 - ShellCheck
+- Bats (bats-core) — required by `make test`/`make quality`
 - Make
 
 ## Branch naming

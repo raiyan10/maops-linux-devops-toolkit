@@ -55,17 +55,40 @@ High findings.
   what is actually tracked in git
 - Engineering review process established (`docs/engineering-reviews/`)
 
+**Unified `maops` CLI** (`bin/maops`)
+- Thin dispatcher over `system`, `monitoring`, `filesystem`, and `network`;
+  see [architecture.md §7](architecture.md#7-unified-maops-cli) for the
+  dispatch table and exit-code design
+- Shared CLI support library `scripts/common/cli.sh` (version output,
+  help/version flag recognition, usage-error handling, positive-integer and
+  TCP-port validation)
+
+**Network module** (`scripts/network/`)
+- Network information, ping checker, DNS lookup, TCP port checker; see
+  [architecture.md §8](architecture.md#8-network-module) for tool choices
+- Fixed (Day 3 release-readiness review, before any tag was cut): a command
+  injection in `port-check.sh` via an unvalidated `HOST` argument reaching a
+  string-interpolated `bash -c` — see
+  [architecture.md §8](architecture.md#8-network-module),
+  [best-practices.md §11](best-practices.md#11-parameterized-bash--c-instead-of-string-interpolation),
+  and [troubleshooting.md §12](troubleshooting.md#12-why-port-checksh-uses-bash--c-with-1-2-instead-of-host-directly)
+- Fixed (same review): `ping-check.sh`/`port-check.sh` misreported a
+  negative-number `COUNT`/`PORT`/`TIMEOUT` as an "unknown option" instead of
+  the correct validation message; both exited `2` either way, but the
+  message now matches the actual problem
+
+**Bats automated tests** (`tests/`)
+- Covers the CLI dispatcher, `scripts/common/cli.sh`'s validation helpers,
+  and the network module's `--help` and invalid-input rejection paths; no
+  test requires internet access
+- `scripts/common/{colors,config,helpers,logger,output}.sh` and the
+  `system`/`monitoring`/`filesystem` leaf scripts still have no dedicated
+  Bats coverage — see Planned below
+
 ## Planned
 
-- **Unified `maops` CLI** — not started; see
-  [architecture.md §7](architecture.md#7-planned-unified-maops-cli) for the
-  intended dispatch design
-- **Network module** (`scripts/network/`) — network info, ping checker, port
-  checker; directory does not exist yet
 - **User and process module** (`scripts/users/`) — user report, last-login
   report; directory does not exist yet
-- **Bats automated tests** for `scripts/common/*.sh` — zero test coverage
-  today
 - **Installation and packaging** — no installer or package target yet
 - **Architecture diagrams** — visual complement to `docs/architecture.md`
 - **Medium technical article**
@@ -73,9 +96,14 @@ High findings.
   `templates/skill-template.md`, and `templates/github-workflow-template.yml`
   are still empty placeholders; only `script-template.sh` is implemented
 - **`require_command` adoption audit** — the guard exists in
-  `scripts/common/helpers.sh` and is used by the filesystem module; extend
-  its use to `system` and `monitoring` scripts for missing-dependency
-  messages on `lscpu`/`free`/`uptime`/`hostname`
-- **Decide on `LOG_DIRECTORY`/`DEFAULT_TIMEOUT`** in `scripts/common/config.sh`
-  — currently defined but unused; either implement file-based logging and
-  timeout enforcement, or remove the dead configuration
+  `scripts/common/helpers.sh` and is used by the filesystem and network
+  modules; extend its use to `system` and `monitoring` scripts for
+  missing-dependency messages on `lscpu`/`free`/`uptime`/`hostname`
+- **Decide on `LOG_DIRECTORY`** in `scripts/common/config.sh` — still defined
+  but unused; either implement file-based logging or remove it.
+  `DEFAULT_TIMEOUT` is no longer in this category — it is now consumed by
+  `ping-check.sh` (per-packet wait) and `port-check.sh` (default connection
+  timeout)
+- **Bats coverage for `scripts/common/*.sh` core libraries and the
+  `system`/`monitoring`/`filesystem` leaf scripts** — the Day 3 suite covers
+  the CLI/network additions only

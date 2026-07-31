@@ -308,3 +308,121 @@ none of the above explains it, open the failed step's log in the Actions tab
 — each step name in the table matches the step name shown there — and check
 whether the failure is in a step's own command (a genuine repo problem) or
 in GitHub-hosted runner setup (transient, safe to re-run).
+
+---
+
+## 9. `bin/maops: Permission denied`
+
+**Symptom:**
+
+```text
+$ ./bin/maops --help
+bash: ./bin/maops: Permission denied
+```
+
+**Cause:** Same class of issue as [§4](#4-wsl-and-windows-git-executable-mode-behavior)
+— `bin/maops` has no `.sh` extension, so it's easy to forget it needs the
+same `100755` git mode as every script under `scripts/`.
+
+**Fix:**
+
+```bash
+git ls-files -s bin/maops   # 100644 means it needs fixing
+git update-index --chmod=+x bin/maops
+```
+
+`make check-executable` covers `bin/maops` explicitly (not just `*.sh`
+files), so this is caught locally before it reaches CI.
+
+---
+
+## 10. `bats: command not found`
+
+**Symptom:** `make test` or `make quality` exits with `Bats is not
+installed.`
+
+**Cause:** [Bats](https://github.com/bats-core/bats-core) isn't installed
+locally. It's a separate tool from ShellCheck.
+
+**Fix:** Install it via your distro's package manager (`sudo apt-get install
+bats` on Ubuntu/Debian) or the
+[bats-core installation guide](https://bats-core.readthedocs.io/en/stable/installation.html).
+CI installs it automatically as part of the "Install ShellCheck and Bats"
+workflow step.
+
+---
+
+## 11. `ping-check.sh` fails with "Operation not permitted"
+
+**Symptom:** `./scripts/network/ping-check.sh <host>` (or `maops network
+ping <host>`) fails immediately, even against a genuinely reachable host, in
+a container or CI-style sandbox.
+
+**Cause:** Sending an ICMP echo request requires either `CAP_NET_RAW` or an
+allowed `ping_group_range` (`iputils-ping` uses an unprivileged ICMP socket
+on modern Linux, but the group range still has to include the running
+user). Minimal containers and some sandboxed environments deny both.
+
+**Fix:** This is an environment limitation, not a script bug — there's
+nothing in `ping-check.sh` to fix. This is also why the Bats suite
+(`tests/network/network-tools.bats`) never exercises a real, live ping: it
+only tests `--help` and invalid-`COUNT` rejection, both of which run before
+any ICMP socket is opened. If you need to confirm real reachability in a
+restricted environment, use `maops network port HOST PORT` instead — TCP
+connect doesn't require raw-socket privileges.
+
+---
+
+## 12. Why `port-check.sh` Uses `bash -c` with `$1`/`$2`, Instead of `$HOST` Directly
+
+**Symptom:** None currently — this documents a fixed vulnerability so it
+isn't reintroduced. If you're reading this while modifying `port-check.sh`
+(or writing a similar script that hands a shell a piece of external input
+inside a nested `bash -c`), read this first.
+
+**Cause (historical):** An earlier version of `scripts/network/port-check.sh`
+built its TCP-connect check like this:
+
+```bash
+timeout "$TIMEOUT" bash -c "exec 3<>/dev/tcp/$HOST/$PORT" 2>/dev/null
+```
+
+`$HOST` is user-supplied and was never validated (unlike `$PORT`/`$TIMEOUT`,
+which go through `validate_tcp_port`/`validate_positive_integer`). Because
+the double-quoted string is expanded by the *outer* shell before being
+handed to `bash -c` as a single argument, and the *inner* `bash` then
+re-parses that whole string as a shell command, any shell metacharacter in
+`$HOST` became code the inner shell executed:
+
+```bash
+$ ./scripts/network/port-check.sh '127.0.0.1;touch /tmp/pwned;' 80 1
+...
+$ ls /tmp/pwned
+/tmp/pwned   # arbitrary command executed via a crafted HOST argument
+```
+
+This was found and fixed during the Day 3 release-readiness review, before
+any tag was cut — see `docs/engineering-reviews/` for the review that caught
+it and the follow-up that verified the fix.
+
+**Fix:** `port-check.sh` now passes `$HOST`/`$PORT` as the inner `bash -c`'s
+own positional parameters instead of interpolating them into the script
+text:
+
+```bash
+timeout "$TIMEOUT" bash -c 'exec 3<>"/dev/tcp/$1/$2"' bash "$HOST" "$PORT" 2>/dev/null
+```
+
+The script argument (`'exec 3<>"/dev/tcp/$1/$2"'`) is single-quoted, so the
+outer shell performs no expansion on it — `$1`/`$2` reach the inner `bash`
+completely literally. `$HOST`/`$PORT` are then bound to the inner shell's own
+`$1`/`$2` via the extra arguments after the script. The inner shell only ever
+*substitutes* those values into the redirection target; a substituted value
+in a redirection operand is never re-tokenized as command syntax, so a
+`HOST` full of shell metacharacters just becomes (and fails as) a malformed
+`/dev/tcp/...` path instead of executing anything. See
+[best-practices.md §11](best-practices.md#11-parameterized-bash--c-instead-of-string-interpolation)
+for the general rule this establishes, and
+`tests/network/network-tools.bats`'s `"port-check.sh does not execute shell
+metacharacters embedded in HOST"` test for the regression coverage that now
+guards against this reappearing.

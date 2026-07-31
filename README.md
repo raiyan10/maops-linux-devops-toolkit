@@ -64,6 +64,8 @@ This repository is part of the **MAOps Technologies Engineering Portfolio**.
 ├── .github
 │   └── workflows
 │       └── bash-validation.yml
+├── bin
+│   └── maops
 ├── docs
 │   ├── architecture.md
 │   ├── best-practices.md
@@ -76,6 +78,7 @@ This repository is part of the **MAOps Technologies Engineering Portfolio**.
 ├── scripts
 │   ├── common
 │   │   ├── bootstrap.sh
+│   │   ├── cli.sh
 │   │   ├── colors.sh
 │   │   ├── config.sh
 │   │   ├── helpers.sh
@@ -89,6 +92,11 @@ This repository is part of the **MAOps Technologies Engineering Portfolio**.
 │   │   ├── cpu-monitor.sh
 │   │   ├── load-average.sh
 │   │   └── memory-report.sh
+│   ├── network
+│   │   ├── dns-lookup.sh
+│   │   ├── network-info.sh
+│   │   ├── ping-check.sh
+│   │   └── port-check.sh
 │   └── system
 │       ├── hostname-report.sh
 │       ├── os-details.sh
@@ -98,6 +106,14 @@ This repository is part of the **MAOps Technologies Engineering Portfolio**.
 │   ├── readme-template.md
 │   ├── script-template.sh
 │   └── skill-template.md
+├── tests
+│   ├── cli
+│   │   └── maops.bats
+│   ├── common
+│   │   └── helpers.bats
+│   ├── network
+│   │   └── network-tools.bats
+│   └── test-helper.bash
 ├── .gitattributes
 ├── .gitignore
 ├── CHANGELOG.md
@@ -107,7 +123,7 @@ This repository is part of the **MAOps Technologies Engineering Portfolio**.
 └── README.md
 ```
 
-`scripts/network` and `scripts/users` are planned modules and do not exist in the tree yet — see [Utilities](#utilities) below.
+`scripts/users` is a planned module and does not exist in the tree yet — see [Utilities](#utilities) below.
 
 ---
 
@@ -133,18 +149,85 @@ This repository is part of the **MAOps Technologies Engineering Portfolio**.
 - [x] Largest Files — `largest-files.sh`
 - [x] Temporary File Cleanup (dry-run scanner, no deletion) — `cleanup-temp.sh`
 
+### Network (`scripts/network`)
+
+- [x] Network Information — `network-info.sh`
+- [x] Ping Checker — `ping-check.sh`
+- [x] DNS Lookup — `dns-lookup.sh`
+- [x] Port Checker — `port-check.sh`
+
+All utilities above are also reachable through the unified [`maops` CLI](#cli-usage) at `bin/maops`.
+
 ## Planned
-
-### Network (`scripts/network`, not yet created)
-
-- [ ] Network Information
-- [ ] Ping Checker
-- [ ] Port Checker
 
 ### Users (`scripts/users`, not yet created)
 
 - [ ] User Report
 - [ ] Last Login Report
+
+---
+
+# CLI Usage
+
+`bin/maops` is a thin dispatcher over the scripts above — it does not reimplement their logic.
+
+```bash
+maops --help
+maops --version
+
+maops system info
+maops system os
+maops system hostname
+
+maops monitoring memory
+maops monitoring cpu
+maops monitoring load
+
+maops filesystem disk
+maops filesystem largest /var/log 20
+maops filesystem temp /tmp 30
+
+maops network info
+maops network ping example.com 4
+maops network dns example.com
+maops network port example.com 443 2
+```
+
+Unknown groups or commands print an actionable error and exit with status `2`. Every dispatched command exits with that underlying script's own exit code.
+
+---
+
+# Network Utilities
+
+```bash
+# Hostname, interfaces, IPv4 addresses, default gateway, DNS resolvers
+./scripts/network/network-info.sh
+
+# Ping a host with a bounded, safe-default packet count
+./scripts/network/ping-check.sh example.com
+./scripts/network/ping-check.sh example.com 6
+
+# Resolve a hostname or IP using the system resolver (getent)
+./scripts/network/dns-lookup.sh localhost
+./scripts/network/dns-lookup.sh example.com
+
+# Check TCP port reachability with a bounded connection timeout
+./scripts/network/port-check.sh example.com 443
+./scripts/network/port-check.sh example.com 443 2
+```
+
+---
+
+# Testing
+
+The test suite uses [Bats](https://github.com/bats-core/bats-core) and requires no internet access — every network-related test either validates rejected input before any connection is attempted, or stays on loopback/`/etc/hosts`.
+
+```bash
+make test      # run the full Bats suite
+make quality   # syntax validation + ShellCheck + executable-mode check + Bats
+```
+
+Individual files can also be run directly, e.g. `bats tests/cli/maops.bats`.
 
 ---
 
@@ -187,10 +270,10 @@ This project follows:
 - [x] Claude Code project guidance
 - [x] Claude Code Skills
 - [x] Git executable-mode and SIGPIPE release-blocker fixes (Engineering Review Day 2)
-- [ ] Unified `maops` CLI
-- [ ] Network utilities
+- [x] Unified `maops` CLI
+- [x] Network utilities
+- [x] Bats automated tests
 - [ ] User and process utilities
-- [ ] Bats automated tests
 - [ ] Installation and packaging
 - [ ] Architecture diagrams
 - [ ] Medium technical article

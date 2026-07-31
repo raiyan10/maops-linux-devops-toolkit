@@ -323,3 +323,88 @@ git ls-files -s | awk '$4 ~ /\.sh$/ && $1 != "100755" {print $4}'
 Any line printed by that command is a script that will fail CI on push. See
 [troubleshooting.md](troubleshooting.md#4-wsl-and-windows-git-executable-mode-behavior)
 for the full symptom-to-fix walkthrough.
+
+---
+
+## 10. CLI Argument Validation via `scripts/common/cli.sh`
+
+`bin/maops` and the `scripts/network/` scripts share validation helpers from
+`scripts/common/cli.sh` rather than each hand-rolling their own regex:
+
+```bash
+is_positive_integer() { [[ "$1" =~ ^[1-9][0-9]*$ ]]; }
+validate_positive_integer() {
+    is_positive_integer "$1" || cli_usage_error "$2 must be a positive integer: $1"
+}
+```
+
+This reuses the same principle already established in
+[§3](#3-input-validation): validate the *shape* of a string with a regex
+before ever using it arithmetically or handing it to an external command
+(`ping -c`, a `timeout` invocation, and so on). `is_valid_port()` goes one
+step further and forces base-10 arithmetic with `10#$1` before the range
+check, so a value like `"065"` can't be misread as octal by `((...))`.
+
+`cli_usage_error()` always calls `exit` directly (never `return`), matching
+`require_command`/`require_linux`'s existing direct-exit convention in
+`helpers.sh` — this guarantees a consistent exit code (`2`) regardless of
+whether the failing validation call happens to be inside a conditional,
+where a `return`-based failure wouldn't trip `set -e` on its own.
+
+Existing scripts under `scripts/filesystem/` that already validate a
+positive integer inline (`largest-files.sh`, `cleanup-temp.sh`) were left
+as-is rather than retrofitted to call `cli.sh` — `cli.sh` is for new CLI
+surface area, not a mandate to rewrite working Day 2 code.
+
+---
+
+## 11. Parameterized `bash -c`, Instead of String Interpolation
+
+Never build a `bash -c` (or any `sh -c`/`ssh ... "..."`/similar) command by
+interpolating a variable directly into the command string:
+
+```bash
+# Dangerous: $HOST is re-parsed as shell syntax by the inner bash
+bash -c "exec 3<>/dev/tcp/$HOST/$PORT"
+```
+
+If `$HOST` contains a shell metacharacter — `;`, `` ` ``, `$(...)`, `|`, `&&`
+— the inner `bash` doesn't see "a hostname with weird characters," it sees
+more shell syntax to execute. This is exactly what happened in an earlier
+version of `scripts/network/port-check.sh`: a crafted `HOST` argument such as
+`127.0.0.1;touch /tmp/pwned;` executed the injected `touch` command, because
+the outer shell only performed ordinary variable substitution before handing
+the resulting string to `bash -c`, and the inner `bash` then parsed that
+string as a full command line, `;` and all.
+
+The fix is to pass the untrusted value as one of `bash -c`'s own positional
+parameters instead of splicing it into the script text:
+
+```bash
+# Safe: $1/$2 are the inner bash's own positional parameters, bound from
+# $HOST/$PORT — the script itself is a fixed, single-quoted literal
+timeout "$TIMEOUT" bash -c 'exec 3<>"/dev/tcp/$1/$2"' bash "$HOST" "$PORT"
+```
+
+Two things make this safe, both necessary together:
+
+1. The script argument to `-c` is **single-quoted**, so the outer shell
+   performs no expansion on it at all — `$1`/`$2` reach the inner `bash`
+   completely literally, not pre-substituted by the outer shell into
+   arbitrary text.
+2. `$HOST`/`$PORT` are passed as **extra arguments after the script**, which
+   `bash -c` binds to the inner shell's own `$1`/`$2` (the argument right
+   after the script text becomes the inner shell's `$0`, by convention
+   usually written as `bash` or `_`). The inner shell only ever *substitutes*
+   `$1`/`$2` into the redirection target — a substituted value is never
+   re-tokenized as command syntax the way `bash -c "$interpolated_string"`
+   would re-tokenize it.
+
+This is the general pattern any future script should follow if it needs to
+hand a shell a piece of untrusted or externally supplied data to run inside
+a nested `-c` invocation: pass it as a parameter, never splice it into the
+script text. See
+[architecture.md §8](architecture.md#8-network-module) for how this applies
+specifically to `port-check.sh`, and
+[troubleshooting.md §12](troubleshooting.md#12-why-port-checksh-uses-bash--c-with-1-2-instead-of-host-directly)
+for the symptom this fixes.
