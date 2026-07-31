@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+
+###############################################################################
+#
+# Script Name : maops
+# Description : Unified CLI dispatcher for the MAOps Linux DevOps Toolkit
+# Author      : Raiyan Yousuf
+# Project     : MAOps Linux DevOps Toolkit
+#
+###############################################################################
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# shellcheck source=scripts/common/bootstrap.sh
+source "$REPO_ROOT/scripts/common/bootstrap.sh"
+
+###############################################################################
+# Usage
+###############################################################################
+
+usage() {
+    cat <<EOF
+$PROJECT_NAME — unified CLI
+
+Usage:
+    maops help | --help | -h
+    maops version | --version
+    maops <group> <command> [ARGS...]
+
+Groups and commands:
+    system      info | os | hostname
+    monitoring  memory | cpu | load
+    filesystem  disk | largest [PATH] [LIMIT] | temp [PATH] [LIMIT]
+    network     info | ping HOST [COUNT] | dns HOSTNAME | port HOST PORT [TIMEOUT]
+
+Examples:
+    maops system info
+    maops monitoring memory
+    maops filesystem largest /var/log 20
+    maops network ping example.com 4
+EOF
+}
+
+###############################################################################
+# Error handling
+###############################################################################
+
+usage_error() {
+    log_error "$1"
+    usage >&2
+    exit 2
+}
+
+###############################################################################
+# Group dispatch
+###############################################################################
+
+dispatch_system() {
+    local action="$1"
+    shift
+
+    case "$action" in
+        info) exec "$REPO_ROOT/scripts/system/system-info.sh" "$@" ;;
+        os) exec "$REPO_ROOT/scripts/system/os-details.sh" "$@" ;;
+        hostname) exec "$REPO_ROOT/scripts/system/hostname-report.sh" "$@" ;;
+        *) usage_error "Unknown system command: $action (expected: info, os, hostname)" ;;
+    esac
+}
+
+dispatch_monitoring() {
+    local action="$1"
+    shift
+
+    case "$action" in
+        memory) exec "$REPO_ROOT/scripts/monitoring/memory-report.sh" "$@" ;;
+        cpu) exec "$REPO_ROOT/scripts/monitoring/cpu-monitor.sh" "$@" ;;
+        load) exec "$REPO_ROOT/scripts/monitoring/load-average.sh" "$@" ;;
+        *) usage_error "Unknown monitoring command: $action (expected: memory, cpu, load)" ;;
+    esac
+}
+
+dispatch_filesystem() {
+    local action="$1"
+    shift
+
+    case "$action" in
+        disk) exec "$REPO_ROOT/scripts/filesystem/disk-usage.sh" "$@" ;;
+        largest) exec "$REPO_ROOT/scripts/filesystem/largest-files.sh" "$@" ;;
+        temp) exec "$REPO_ROOT/scripts/filesystem/cleanup-temp.sh" "$@" ;;
+        *) usage_error "Unknown filesystem command: $action (expected: disk, largest, temp)" ;;
+    esac
+}
+
+dispatch_network() {
+    local action="$1"
+    shift
+
+    case "$action" in
+        info) exec "$REPO_ROOT/scripts/network/network-info.sh" "$@" ;;
+        ping) exec "$REPO_ROOT/scripts/network/ping-check.sh" "$@" ;;
+        dns) exec "$REPO_ROOT/scripts/network/dns-lookup.sh" "$@" ;;
+        port) exec "$REPO_ROOT/scripts/network/port-check.sh" "$@" ;;
+        *) usage_error "Unknown network command: $action (expected: info, ping, dns, port)" ;;
+    esac
+}
+
+###############################################################################
+# Main
+###############################################################################
+
+main() {
+    if (($# == 0)); then
+        usage_error "Missing command."
+    fi
+
+    case "$1" in
+        help | --help | -h)
+            usage
+            exit 0
+            ;;
+
+        version | --version)
+            cli_show_version
+            exit 0
+            ;;
+
+        system | monitoring | filesystem | network)
+            local group="$1"
+            shift
+
+            if (($# == 0)); then
+                usage_error "Missing command for group: $group"
+            fi
+
+            "dispatch_$group" "$@"
+            ;;
+
+        *)
+            usage_error "Unknown command or group: $1 (expected: help, version, system, monitoring, filesystem, network)"
+            ;;
+    esac
+}
+
+main "$@"

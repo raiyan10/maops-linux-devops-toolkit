@@ -21,36 +21,13 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Install ShellCheck
+      - name: Install ShellCheck and Bats
         run: |
           sudo apt-get update
-          sudo apt-get install --yes shellcheck
+          sudo apt-get install --yes shellcheck bats
 
-      - name: Validate Bash syntax
-        run: |
-          find scripts -type f -name "*.sh" -print0 \
-            | xargs -0 -r -n 1 bash -n
-
-      - name: Run ShellCheck
-        run: |
-          find scripts -type f -name "*.sh" -print0 \
-            | xargs -0 -r shellcheck
-
-      - name: Verify executable modes
-        shell: bash
-        run: |
-          missing="$(
-            git ls-files -s |
-              awk '$4 ~ /\.sh$/ && $1 != "100755" {print $4}'
-          )"
-
-          if [[ -n "$missing" ]]; then
-            echo "The following tracked shell files are not executable:"
-            printf '%s\n' "$missing"
-            exit 1
-          fi
-
-          echo "All tracked shell files have executable mode."
+      - name: Run quality checks
+        run: make quality
 
       - name: Validation completed
         run: echo "All Bash quality checks passed."

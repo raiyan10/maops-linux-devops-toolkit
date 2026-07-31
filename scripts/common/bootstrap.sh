@@ -15,3 +15,5 @@ source "$COMMON_DIR/helpers.sh"
 source "$COMMON_DIR/logger.sh"
 # shellcheck source=scripts/common/output.sh
 source "$COMMON_DIR/output.sh"
+# shellcheck source=scripts/common/cli.sh
+source "$COMMON_DIR/cli.sh"
