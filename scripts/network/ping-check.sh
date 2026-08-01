@@ -6,7 +6,6 @@
 # Description : Check host reachability with a bounded, safe-default ping
 # Author      : Raiyan Yousuf
 # Project     : MAOps Linux DevOps Toolkit
-# Version     : 0.2.0
 #
 ###############################################################################
 

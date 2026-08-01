@@ -132,7 +132,21 @@
       "Bash(mkdir -p /tmp/claude-1000/-mnt-f-DevOps-Portfolio-maops-linux-devops-toolkit/0006e2dc-4c85-4014-bb89-fcc292426a3c/scratchpad/permcheck)",
       "Bash(tar -tvzf dist/*.tar.gz)",
       "Bash(grep -E 'bin/maops$|config-manager.sh$|README.md$')",
-      "Bash(awk -F: '{sum+=$2; print} END {print \"TOTAL:\", sum}')"
+      "Bash(awk -F: '{sum+=$2; print} END {print \"TOTAL:\", sum}')",
+      "Bash(wait)",
+      "Bash(grep -n 'eval\\\\|source $\\\\|\\\\. $\\\\|$\\(<' /mnt/f/DevOps-Portfolio/maops-linux-devops-toolkit/scripts/common/integrity.sh /mnt/f/DevOps-Portfolio/maops-linux-devops-toolkit/scripts/release/verify-package.sh /mnt/f/DevOps-Portfolio/maops-linux-devops-toolkit/scripts/install/install.sh /mnt/f/DevOps-Portfolio/maops-linux-devops-toolkit/scripts/install/uninstall.sh /mnt/f/DevOps-Portfolio/maops-linux-devops-toolkit/scripts/diagnostics/integrity-check.sh /mnt/f/DevOps-Portfolio/maops-linux-devops-toolkit/scripts/release/package.sh /mnt/f/DevOps-Portfolio/maops-linux-devops-toolkit/scripts/install/lib.sh)",
+      "Bash(grep -nE '\\\\$[A-Za-z_]+[^\"'\\\\'']' /mnt/f/DevOps-Portfolio/maops-linux-devops-toolkit/scripts/install/uninstall.sh)",
+      "Bash(command -v bats)",
+      "Bash(gh run *)",
+      "Bash(make test *)",
+      "Bash(command -v gh)",
+      "Bash(pip show *)",
+      "Bash(env)",
+      "Bash(xargs -0 -r bats)",
+      "Bash(bash -n tests/test-helper.bash)",
+      "Bash(make validate *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git reset *)"
     ]
   }
 }

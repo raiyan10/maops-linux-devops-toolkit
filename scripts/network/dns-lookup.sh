@@ -6,7 +6,6 @@
 # Description : Resolve a hostname or IP address using the system resolver
 # Author      : Raiyan Yousuf
 # Project     : MAOps Linux DevOps Toolkit
-# Version     : 0.2.0
 #
 ###############################################################################
 

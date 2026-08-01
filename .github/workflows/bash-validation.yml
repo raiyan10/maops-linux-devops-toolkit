@@ -19,28 +19,19 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Install ShellCheck and Bats
+      - name: Install development dependencies
         run: |
           sudo apt-get update
           sudo apt-get install --yes shellcheck bats python3
 
-      - name: Run quality checks
-        run: make quality
-
-      - name: Build release package
-        run: make package
-
-      - name: Verify release package
-        run: make verify-package
-
-      - name: Smoke-test install / doctor / uninstall
+      - name: Run release check (quality, package, verify-package, smoke-install)
         env:
           HOME: ${{ runner.temp }}/maops-ci-home
         run: |
           mkdir -p "$HOME"
-          make smoke-install
+          make release-check
 
       - name: Validation completed
         run: echo "All Bash quality checks passed."

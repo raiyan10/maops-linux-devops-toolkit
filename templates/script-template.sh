@@ -6,7 +6,6 @@
 # Description : <description>
 # Author      : Raiyan Yousuf
 # Project     : MAOps Linux DevOps Toolkit
-# Version     : <version>
 #
 ###############################################################################
 

@@ -173,6 +173,26 @@ the first place. See
 [best-practices.md](best-practices.md#9-git-executable-modes-under-wsl) for
 the underlying convention.
 
+**This used to affect packaged/installed output too, not just CI.** Before
+Day 6, `package.sh`/`install.sh` staged files with `cp -a`, which copied
+whatever mode the *source* filesystem reported — `0777` on `drvfs`,
+regardless of what git had recorded. If you built a release or ran
+`install.sh` directly from a `/mnt/c/...`/`/mnt/f/...` checkout, the
+packaged/installed files could end up world-writable even though `git
+ls-files -s` showed the correct mode all along. This is fixed: staging now
+derives every mode from `git ls-files -s` exclusively and never consults
+`stat` on the source tree. If you still see an unexpected mode in a
+freshly-built `dist/*.tar.gz` or freshly-installed tree, run `maops
+integrity` (§17 below) against it — it will name the exact file and the
+expected-vs-actual mode, and if it's clean, the problem is likely in a
+custom fork of `package.sh`/`install.sh` that reintroduced `cp -a`
+somewhere, not in the filesystem mounting behavior itself.
+
+**This also affects the Bats tests that simulate drvfs.** If a
+`build_drvfs_clone_fixture`-based test passes locally but fails only in CI,
+that's a different, test-only manifestation of the same `core.fileMode`
+sensitivity — see [§18](#18-build_drvfs_clone_fixture-bats-tests-pass-on-wsl-but-fail-on-a-real-ci-runner).
+
 ---
 
 ## 5. SC1091
@@ -300,6 +320,7 @@ independently. Reproduce each one locally before re-pushing:
 | Validate Bash syntax | `make validate` | A real syntax error — unclosed quote/brace, bad `case` statement |
 | Run ShellCheck | `make lint` | A ShellCheck warning/error at default severity; see [SC1091](#5-sc1091) / [SC2317](#6-sc2317) above for the two info-level notices this project has already reasoned about |
 | Verify executable modes | `make check-executable` | A script committed as `100644` instead of `100755` — see [§4](#4-wsl-and-windows-git-executable-mode-behavior) above, most commonly caused by committing from a WSL `drvfs` mount |
+| Run the Bats suite | `make test` | A genuine test regression, or — if the failing test passes locally on WSL but fails only in CI and involves `build_drvfs_clone_fixture` — see [§18](#18-build_drvfs_clone_fixture-bats-tests-pass-on-wsl-but-fail-on-a-real-ci-runner) |
 | Install ShellCheck | — | Runner-side `apt-get` failure (transient); re-run the job |
 
 `make quality` runs the first three in sequence and is the fastest way to
@@ -531,3 +552,137 @@ editing an existing one — the checksum file is regenerated alongside it, so
 the two always match a freshly built pair. If you need to confirm two builds
 from the same source tree are identical, compare their SHA-256 sums directly
 rather than editing either archive in place.
+
+**A second, independent check can also fail even when the checksum passes.**
+Since Day 6, `verify-package.sh` also validates the archive's internal
+`MAOPS-MANIFEST.tsv` — every distributed file's mode, SHA-256 content, and
+presence — *after* the external `.sha256` check. If you see a failure
+naming a specific file (`Content mismatch for manifest entry: ...`, `Mode
+mismatch for manifest entry: ...`, or `Extra distributed file not listed in
+manifest: ...`) rather than a generic checksum-mismatch message, the archive
+passed the whole-file checksum but a file inside it doesn't match what the
+manifest says it should be — this can only happen if the archive was
+rebuilt or edited by hand after the fact (e.g. re-tarring an extracted copy
+with a stale `MAOPS-MANIFEST.tsv`, or editing a file post-extraction and
+re-packing). The fix is the same: rebuild from source with `make package`,
+never hand-edit an archive's contents.
+
+**A crafted or corrupted archive can also fail before extraction even
+runs**, with a message like `Refusing archive with an unsafe member path`,
+`disallowed member type for: ...`, or `multiple top-level roots in
+archive`. This means the archive contains a member `verify-package.sh`
+refuses to trust on principle — an absolute path, a `..` traversal
+component, a symlink/hardlink/device/FIFO member, or more than one
+top-level directory — and is refusing to extract it at all rather than
+attempting to sanitize it. A legitimately-built archive from `make package`
+never produces any of these; seeing one means the archive did not come from
+this project's own build, or was tampered with after the fact.
+
+---
+
+## 17. Interpreting a `maops integrity` Failure
+
+**Symptom:** `maops integrity` exits `1` and reports one or more entries
+with a `category` of `missing`, `modified`, `unexpected-mode`, or
+`malformed-manifest`.
+
+**What each category means:**
+
+- **`missing`** — a file the manifest expects is not present. In an
+  installed tree, something deleted a file under `PREFIX/lib/maops` after
+  install; reinstall (`make install` / `install.sh --force`) to restore it.
+  In a source-tree checkout, a Git-tracked release file is missing from the
+  working tree — `git status`/`git checkout -- <path>` will show and fix it.
+- **`modified`** — the file exists but its content doesn't match. In an
+  installed tree, this means something edited an installed file directly
+  (installed files are meant to be treated as read-only; edit the source and
+  reinstall instead). In a source-tree checkout, it means uncommitted local
+  changes to a tracked release file — expected during development, worth a
+  second look if unexpected.
+- **`unexpected-mode`** — content matches, but the permission bits don't.
+  In an installed tree, something ran `chmod` on an installed file directly.
+  In a source-tree checkout, it means Git's *index* mode itself is wrong for
+  that path (see §4 above) — `unexpected-mode` here is about what Git has
+  recorded, never about working-tree `stat`, so fixing the working tree's
+  permissions alone will not clear it; use `git update-index --chmod`.
+- **`malformed-manifest`** — the manifest file itself couldn't be parsed
+  (wrong field count, invalid mode, non-hex/wrong-length checksum, an unsafe
+  path, or a duplicate entry). In an installed tree, this generally means
+  `.integrity-manifest` was hand-edited or corrupted — reinstall to
+  regenerate it. `maops integrity` never repairs anything itself, in any
+  category — it only reports.
+
+**Fix, in general:** `maops integrity` is diagnostic-only by design (see
+[architecture.md §16](architecture.md#16-integrity-verification-maops-integrity)) —
+there is no `--repair` flag and there will not be one; the fix for every
+category above is either to reinstall from a trusted source (installed
+mode) or to reconcile the working tree with Git directly (source-tree
+mode), never to have the tool silently patch files it doesn't fully trust.
+
+---
+
+## 18. `build_drvfs_clone_fixture` Bats Tests Pass on WSL but Fail on a Real CI Runner
+
+**Symptom:** `tests/release/package.bats`, `tests/diagnostics/integrity-check.bats`,
+and `tests/install/install.bats`'s "drvfs simulation" / "observed permissions
+are 0777" tests all pass in a local WSL/drvfs checkout, but the same tests
+fail on GitHub Actions' `ubuntu-latest` runner with output like:
+
+```text
+not ok 101 manifest and archived file modes are correct even from a drvfs-simulated (0777) source tree
+#   `[[ "$output" == -rw-r--r--* ]]' failed
+not ok 144 healthy source tree passes with exit 0, even when observed permissions are 0777
+#   `[ "$status" -eq 0 ]' failed
+```
+
+`make test`'s failure itself is reported generically as
+`make: *** [Makefile:64: test] Error 123` regardless of which test actually
+failed — that line number is just where `xargs` (which runs `bats`) sits in
+the `test` recipe, not the failing test's location. Always scroll up to the
+first `not ok` line for the real cause; the `# (in test file ...)` and
+`# ... failed` lines immediately below it name the actual assertion.
+
+**Cause:** `build_drvfs_clone_fixture` (`tests/test-helper.bash`) simulates
+the drvfs symptom described in [§4](#4-wsl-and-windows-git-executable-mode-behavior)
+by copying the repository (including `.git`) into a scratch directory and
+force-`chmod`-ing every file to `0777`. Every consuming test then runs `git
+add -A` inside that fixture. Whether that `git add -A` actually re-records
+the fake `0777` executable bit into the fixture's Git index depends on the
+fixture's own `core.fileMode` setting — and until this was fixed, the
+fixture never set that explicitly, so it inherited whatever `core.fileMode`
+the *host* repository happened to have:
+
+- On a WSL/drvfs checkout, Git commonly auto-detects the mount's unreliable
+  permission bits and sets `core.fileMode=false` locally. `git add -A`
+  is then a genuine no-op for modes, so the fixture's index stays correct
+  and the test reproduces the intended symptom: `stat` reports `0777`, but
+  Git's index (the only thing `git ls-files -s` and `git diff --quiet`
+  actually consult) still has the real `100644`/`100755` mode.
+- On a fresh GitHub Actions checkout (real ext4), `core.fileMode` defaults
+  to `true`. `git add -A` then genuinely re-stages the forced `0777` as
+  `100755` on every file, corrupting the fixture's index for real — so the
+  code under test (correctly) reports the corruption it's designed to
+  catch, and the test fails.
+
+The production code (`scripts/common/integrity.sh`, `package.sh`,
+`install.sh`, `integrity-check.sh`) was never the problem here — this was a
+test-fixture bug, not a mode-normalization bug.
+
+**Fix:** `build_drvfs_clone_fixture` now pins the fixture's own
+`core.fileMode` explicitly instead of relying on inheritance:
+
+```bash
+git -C "$dest" config core.fileMode false
+```
+
+This makes the fixture reproduce the *observed symptom* deterministically
+on any host — including a normal ext4 CI runner — without needing an actual
+drvfs mount, which was always the fixture's stated intent.
+
+**If you're debugging a similar "passes locally, fails in CI" Bats
+failure:** check whether the failing test touches Git mode at all, and if
+so, compare `git config --get core.fileMode` between your local checkout
+and a fresh clone (`git config --get core.fileMode` prints nothing at all
+if it's unset, which behaves as `true`). A test or fixture that assumes a
+particular `core.fileMode` value without setting it explicitly will drift
+by environment exactly like this one did.

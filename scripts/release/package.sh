@@ -11,7 +11,6 @@
 #               released tarball can never drift apart.
 # Author      : Raiyan Yousuf
 # Project     : MAOps Linux DevOps Toolkit
-# Version     : 0.4.0
 #
 ###############################################################################
 
@@ -24,11 +23,21 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$REPO_ROOT/scripts/common/bootstrap.sh"
 # shellcheck source=scripts/common/release-files.sh
 source "$REPO_ROOT/scripts/common/release-files.sh"
+# shellcheck source=scripts/common/integrity.sh
+source "$REPO_ROOT/scripts/common/integrity.sh"
 
 readonly DIST_DIR="$REPO_ROOT/dist"
 readonly PKG_NAME="maops-linux-devops-toolkit-$PROJECT_VERSION"
-readonly STAGE_ROOT="$DIST_DIR/.package-staging"
-readonly STAGE_DIR="$STAGE_ROOT/$PKG_NAME"
+
+# Staging happens under mktemp's default location (never under $DIST_DIR)
+# specifically because $REPO_ROOT may sit on a filesystem (e.g. WSL/drvfs)
+# where chmod is a silent no-op -- see integrity_chmod_verified, which
+# would otherwise catch this at staging time and abort. mktemp's default
+# location is a plain filesystem that reliably honors chmod; only the
+# final binary archive (a plain file write, no chmod required) is written
+# into $DIST_DIR.
+STAGE_ROOT=""
+STAGE_DIR=""
 
 ###############################################################################
 # Usage
@@ -84,34 +93,42 @@ require_git_checkout() {
     fi
 }
 
-# copy_entry ENTRY
-# ENTRY is a path relative to REPO_ROOT, per scripts/common/release-files.sh.
-# A directory entry is expanded to its git-tracked files only, so a stray
-# untracked temp/editor file left inside e.g. scripts/ is never packaged.
-copy_entry() {
-    local entry="$1"
-    local src="$REPO_ROOT/$entry"
-
-    if [[ -d "$src" ]]; then
-        local rel
-        while IFS= read -r rel; do
-            mkdir -p -- "$(dirname -- "$STAGE_DIR/$rel")"
-            cp -a -- "$REPO_ROOT/$rel" "$STAGE_DIR/$rel"
-        done < <(cd "$REPO_ROOT" && git ls-files -z -- "$entry" | tr '\0' '\n')
-    else
-        mkdir -p -- "$(dirname -- "$STAGE_DIR/$entry")"
-        cp -a -- "$src" "$STAGE_DIR/$entry"
-    fi
+# init_staging_root
+# Creates STAGE_ROOT via mktemp (see the STAGE_ROOT comment above for why)
+# and registers an EXIT trap so it is removed on every exit path, success
+# or failure alike -- unlike a cleanup step only reached after the whole
+# build succeeds.
+init_staging_root() {
+    STAGE_ROOT="$(mktemp -d)"
+    trap 'rm -rf -- "$STAGE_ROOT"' EXIT
+    STAGE_DIR="$STAGE_ROOT/$PKG_NAME"
 }
 
+# build_staging
+# Copies every entry in RELEASE_FILE_LIST into STAGE_DIR, expanded to its
+# Git-tracked files (git ls-files -- ENTRY handles both a directory entry
+# like "scripts" and a single-file entry like "README.md" uniformly, so a
+# stray untracked temp/editor file is never packaged). Every file's
+# filesystem mode is derived from Git's index, never from the source
+# filesystem's stat/cp -a -- this is what keeps the archive reproducible
+# regardless of whether the checkout sits on a filesystem (e.g. WSL/drvfs)
+# that misreports tracked-file permissions. The per-file manifest lines
+# integrity_copy_git_tracked prints are captured into MAOPS-MANIFEST.tsv,
+# sorted deterministically, so the archive ships an independent per-file
+# integrity record alongside the external whole-archive checksum.
 build_staging() {
-    rm -rf -- "$STAGE_ROOT"
     mkdir -p -- "$STAGE_DIR"
 
-    local entry
-    for entry in "${RELEASE_FILE_LIST[@]}"; do
-        copy_entry "$entry"
-    done
+    local manifest_tmp="$STAGE_ROOT/.manifest.tmp"
+    if ! integrity_copy_git_tracked "$STAGE_DIR" "$REPO_ROOT" "${RELEASE_FILE_LIST[@]}" >"$manifest_tmp"; then
+        log_error "${INTEGRITY_LAST_ERROR:-Failed to stage Git-tracked release files.}"
+        exit 1
+    fi
+
+    LC_ALL=C sort -o "$STAGE_DIR/MAOPS-MANIFEST.tsv" "$manifest_tmp"
+    rm -f -- "$manifest_tmp"
+
+    find "$STAGE_DIR" -type d -exec chmod 0755 {} +
 }
 
 ###############################################################################
@@ -138,19 +155,15 @@ build_archive() {
     log_success "Built $DIST_DIR/$checksum_name"
 }
 
-cleanup_staging() {
-    rm -rf -- "$STAGE_ROOT"
-}
-
 ###############################################################################
 # Main
 ###############################################################################
 
 main() {
     require_git_checkout
+    init_staging_root
     build_staging
     build_archive
-    cleanup_staging
 }
 
 parse_args "$@"

@@ -10,7 +10,6 @@
 #               metacharacters or command substitution can never execute.
 # Author      : Raiyan Yousuf
 # Project     : MAOps Linux DevOps Toolkit
-# Version     : 0.4.0
 #
 # Depends on scripts/common/cli.sh (is_one_of, is_positive_integer) already
 # being loaded by the caller via bootstrap.sh. Not added to bootstrap.sh's

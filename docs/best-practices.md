@@ -324,6 +324,36 @@ Any line printed by that command is a script that will fail CI on push. See
 [troubleshooting.md](troubleshooting.md#4-wsl-and-windows-git-executable-mode-behavior)
 for the full symptom-to-fix walkthrough.
 
+**This problem is not limited to `git status`/CI — it used to leak into
+packaged and installed output too.** `scripts/release/package.sh` and
+`scripts/install/install.sh` (source-tree mode) previously staged files with
+`cp -a`, which propagates whatever the *source filesystem* reports — on
+drvfs, that's `0777` for everything, meaning a release built or installed
+from a drvfs checkout could silently ship world-writable executables and
+configuration files. The fix: neither script trusts `stat` on the source
+tree at all anymore. Every staged/installed file's mode is derived
+exclusively from `git ls-files -s` (the same index data `check-executable`
+above already trusts) via the shared `integrity_copy_git_tracked` helper in
+`scripts/common/integrity.sh`, applied with a plain `cp` (never `cp -a`) plus
+an explicit `chmod` that immediately re-reads the mode back via `stat` and
+aborts loudly if it didn't take — so a destination filesystem that silently
+ignores `chmod` produces a hard build/install failure, not a package or
+install that only looks correct. See
+[architecture.md §11](architecture.md#11-installation-and-runtime-layout) and
+[§15](architecture.md#15-packaging-and-release-verification) for the full
+mechanism, and `tests/release/package.bats`/`tests/install/install.bats`'s
+`build_drvfs_clone_fixture`-based tests for the regression coverage — they
+simulate the `0777`-observed-permission symptom deterministically on any
+filesystem (via a plain-copy-then-`chmod -R 0777` fixture) rather than
+requiring an actual drvfs mount to test against.
+
+Release policy for distributed files is exactly two modes, never anything
+else: **`0755`** for `bin/maops`, every tracked `*.sh` script, and
+`templates/script-template.sh`; **`0644`** for everything else distributed
+(`README.md`, `LICENSE`, `CHANGELOG.md`, `CONTRIBUTING.md`, `Makefile`,
+`.gitattributes`, and non-executable files under `scripts/`/`templates/`).
+`MAOPS-MANIFEST.tsv` (§15/§16 below) encodes and enforces exactly this rule.
+
 ---
 
 ## 10. CLI Argument Validation via `scripts/common/cli.sh`
@@ -561,25 +591,50 @@ well-known, fixed locations, but the installer takes a user-supplied
 directory (`--prefix`) as an argument to genuinely mutating operations
 (`mkdir`, `mv`, `ln`, `rm`). Three rules make that safe:
 
-**Never `rm -rf` a variable — only ever a manifest-verified file list.**
-Uninstall's removal loop is:
+**Never `rm -rf` a variable — only ever a manifest-verified file list,
+scoped to `LIB_DIR`, validated entirely before anything is removed.**
+`PREFIX` (`$HOME/.local` by default) is frequently a *shared* location —
+other tools can and do install their own files under sibling directories
+like `PREFIX/bin` or `PREFIX/share`. Scoping the removal guard to `PREFIX`
+itself would let a corrupted or tampered manifest reach those siblings, so
+the guard is scoped to `LIB_DIR` (`PREFIX/lib/maops`) specifically — the one
+subtree this installer actually owns. Validation is also a fully separate,
+read-only pass that runs *before* `remove_files` ever calls `rm`, and it
+fails the whole manifest closed on the first problem, not just the
+offending entry:
 
 ```bash
-for path in "${MANIFEST_FILES[@]}"; do
-    case "$path" in
-        "$PREFIX"/*) : ;;
-        *) log_error "Refusing to remove out-of-prefix path: $path"; exit 1 ;;
-    esac
-    [[ -e "$path" || -L "$path" ]] && rm -f -- "$path"
-done
+validate_manifest_files() {
+    local path
+    local -A seen=()
+
+    for path in "${MANIFEST_FILES[@]}"; do
+        [[ -z "$path" ]] && { log_error "Malformed manifest: empty file entry."; exit 1; }
+
+        case "$path" in
+            "$LIB_DIR"/*) : ;;
+            *) log_error "Refusing manifest entry outside $LIB_DIR: $path"; exit 1 ;;
+        esac
+
+        integrity_path_has_dotdot_component "$path" && {
+            log_error "Refusing manifest entry with path traversal: $path"; exit 1
+        }
+
+        [[ -n "${seen[$path]:-}" ]] && { log_error "Duplicate manifest entry: $path"; exit 1; }
+        seen[$path]=1
+    done
+}
 ```
 
-Every path is checked against the resolved prefix *before* removal, and
-removal is always `rm -f --` on one file at a time — never `rm -rf` on a
-directory built from `$PREFIX` or any other variable. Empty directories are
-cleaned up afterward with plain `rmdir --` (which fails loudly, not
-silently, if a directory turns out to be unexpectedly non-empty), not
-`rm -rf`.
+Only after every entry passes does `remove_files` run its simple
+existence-check-then-`rm -f --` loop — one file at a time, never `rm -rf` on
+a directory built from `$PREFIX`/`$LIB_DIR` or any other variable. Empty
+directories are cleaned up afterward with plain `rmdir --` (which fails
+loudly, not silently, if a directory turns out to be unexpectedly
+non-empty), not `rm -rf`. `tests/install/install.bats` includes regression
+tests proving a manifest entry pointing at `PREFIX/share/...` (outside
+`LIB_DIR` but still under `PREFIX`), a `..`-traversal entry, and a duplicate
+entry are all refused with the target file(s) provably untouched.
 
 **Quote every path, and use `--` before it in every mutating command.** A
 prefix value starting with `-` must never be misread as a flag:
@@ -679,4 +734,83 @@ document would break any consumer piping into `python3 -m json.tool` or
 `jq`. `doctor`'s array-of-checks shape is composed by joining several
 `json_kv`-built fragments with `,` in the caller, rather than teaching
 `format.sh` a general array/nesting API — keeping the shared library itself
-small and easy to verify by inspection.
+small and easy to verify by inspection. `maops integrity --format json`
+(§19 below) follows the exact same discipline: one document, no stray
+output, same `json_kv` composition style.
+
+## 19. Archive Member-Type Allowlisting, Not a Blocklist
+
+`scripts/release/verify-package.sh` ([architecture.md
+§15](architecture.md#15-packaging-and-release-verification)) must reject a
+malicious or corrupted archive's symlink/hardlink/device/FIFO members before
+extraction ever runs. Two implementation choices matter here:
+
+**Allowlist member types, don't blocklist them.** The check is "accept only
+`isreg()` or `isdir()`," not "reject `issym()`, reject `islnk()`, reject
+`ischr()`, reject `isblk()`, reject `isfifo()`, reject ...". A blocklist has
+to be complete to be safe — miss one tar extension type and it silently
+passes through. An allowlist is safe by construction: anything not
+explicitly permitted is rejected, with no way to forget a case.
+
+**Inspect real member type flags via Python's `tarfile` module, not GNU
+tar's own text output.** `tar -tv`'s verbose listing is a human-readable
+convenience, not a documented, version-stable interface — relying on its
+leading permission character or a `"link to"` substring to distinguish a
+hardlink from a regular file would mean trusting the very tool ("the
+extracting tar implementation") this check exists to not rely on.
+`tarfile.TarInfo.type` is an unambiguous, directly-inspectable byte read
+from the archive header itself:
+
+```python
+if not (member.isreg() or member.isdir()):
+    fail(f"disallowed member type for: {member.name}")
+```
+
+This is release-engineering-only tooling — `verify-package.sh` requires
+`python3` in addition to `tar`/`sha256sum`, but the installed runtime CLI's
+own dependency list (`doctor.sh`'s `REQUIRED_COMMANDS`/`OPTIONAL_COMMANDS`)
+is unrelated and unchanged; an end user running `maops` day to day never
+needs `python3` for anything this project ships.
+
+Symlinks are refused unconditionally, with no "validate the target and
+allow it" carve-out — the project ships zero legitimate symlinks today
+(confirmed via `git ls-files -s`), so there is no legitimate case to
+special-case, and parsing a symlink's target safely out of a generic
+listing is exactly the kind of added complexity that tends to hide the next
+bug. `tests/release/package.bats`'s `craft_tar_with_member` helper (built on
+the same `tarfile` module) constructs one crafted archive per rejected type
+— symlink, hardlink, character device, block device, FIFO — so each
+rejection path has a concrete, real archive to test against, not just an
+assertion about what the code is supposed to do.
+
+## 20. Two-Tier Archive Integrity: External Checksum vs. Internal Manifest
+
+A single SHA-256 checksum for the whole archive answers one question: "are
+these exactly the bytes I was told to trust?" It cannot answer a second,
+narrower question that matters just as much: "is *this specific file inside
+the archive* exactly what it's supposed to be, independent of who signed the
+checksum?" If an archive-hosting service is itself compromised, an attacker
+who can modify the archive can typically also re-sign its `.sha256`
+sidecar — at which point the external checksum, though technically
+"correct," has stopped meaning anything.
+
+`MAOPS-MANIFEST.tsv` is the second, independent layer: a
+`MODE<TAB>SHA256<TAB>RELATIVE_PATH` line for every distributed file, sorted
+deterministically (`LC_ALL=C`), generated once by `package.sh` from
+Git-tracked content, shipped inside the archive, and verified by
+`verify-package.sh` *after* the archive-member safety checks (§19) but using
+the same content-hashing logic (`integrity_sha256_file`) the mode-
+normalization code (§9 above) already relies on. The two checksums are
+never conflated or compared to each other — the external `.sha256` remains
+the sole authority for "is this the archive," and the internal manifest is
+the sole authority for "is this file, inside a trusted archive, unmodified."
+A tampered file inside an otherwise-checksum-valid archive fails the second
+check even though it passed the first.
+
+The same manifest format, and the same parsing/validation code
+(`integrity_read_manifest` in `scripts/common/integrity.sh`), is reused a
+third time by `maops integrity` (§16 in architecture.md) against an
+*installed* copy of the manifest (`.integrity-manifest`) — one deterministic
+format, one parser, three different trust contexts (package build, archive
+verification, post-install verification), rather than three subtly
+different reimplementations that could drift apart.

@@ -6,7 +6,6 @@
 # Description : Check TCP port reachability with a bounded connection timeout
 # Author      : Raiyan Yousuf
 # Project     : MAOps Linux DevOps Toolkit
-# Version     : 0.2.0
 #
 ###############################################################################
 

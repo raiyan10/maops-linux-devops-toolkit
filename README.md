@@ -54,7 +54,8 @@ This repository is part of the **MAOps Technologies Engineering Portfolio**.
 ├── .claude
 │   ├── CLAUDE.md
 │   ├── agents
-│   │   └── bash-test-engineer.md
+│   │   ├── bash-test-engineer.md
+│   │   └── release-engineer.md
 │   ├── settings.local.json
 │   └── skills
 │       ├── bash-review
@@ -90,13 +91,15 @@ This repository is part of the **MAOps Technologies Engineering Portfolio**.
 │   │   ├── config-file.sh
 │   │   ├── format.sh
 │   │   ├── helpers.sh
+│   │   ├── integrity.sh
 │   │   ├── logger.sh
 │   │   ├── output.sh
 │   │   └── release-files.sh
 │   ├── config
 │   │   └── config-manager.sh
 │   ├── diagnostics
-│   │   └── doctor.sh
+│   │   ├── doctor.sh
+│   │   └── integrity-check.sh
 │   ├── filesystem
 │   │   ├── cleanup-temp.sh
 │   │   ├── disk-usage.sh
@@ -136,13 +139,19 @@ This repository is part of the **MAOps Technologies Engineering Portfolio**.
 │   ├── cli
 │   │   └── maops.bats
 │   ├── common
+│   │   ├── core-libraries.bats
 │   │   └── helpers.bats
 │   ├── config
 │   │   └── config-manager.bats
 │   ├── diagnostics
-│   │   └── doctor.bats
+│   │   ├── doctor.bats
+│   │   └── integrity-check.bats
+│   ├── filesystem
+│   │   └── filesystem-tools.bats
 │   ├── install
 │   │   └── install.bats
+│   ├── monitoring
+│   │   └── monitoring-tools.bats
 │   ├── network
 │   │   └── network-tools.bats
 │   ├── process
@@ -151,8 +160,12 @@ This repository is part of the **MAOps Technologies Engineering Portfolio**.
 │   │   └── package.bats
 │   ├── service
 │   │   └── service-status.bats
+│   ├── system
+│   │   └── system-tools.bats
 │   ├── users
 │   │   └── user-report.bats
+│   ├── workflows
+│   │   └── actions-pinning.bats
 │   └── test-helper.bash
 ├── .gitattributes
 ├── .gitignore
@@ -215,11 +228,12 @@ This repository is part of the **MAOps Technologies Engineering Portfolio**.
 ### Diagnostics (`scripts/diagnostics`)
 
 - [x] Environment/health check — toolkit version, execution mode, OS, Bash version, config state, required/optional command availability (read-only, no network calls) — `doctor.sh`
+- [x] Integrity verification — installed-tree-vs-manifest or source-tree-vs-Git-index, read-only, never repairs — `integrity-check.sh`
 
 ### Installation and Packaging (`scripts/install`, `scripts/release`)
 
-- [x] User-local install/uninstall with a staged, manifest-based runtime tree — `install.sh`, `uninstall.sh`
-- [x] Reproducible release tarball plus SHA-256 checksum verification — `package.sh`, `verify-package.sh`
+- [x] User-local install/uninstall with a staged, manifest-based runtime tree, supporting both a Git checkout and an extracted release archive as the install source — `install.sh`, `uninstall.sh`
+- [x] Reproducible release tarball, Git-index-derived file modes, an internal per-file integrity manifest, and hardened archive-member/checksum verification — `package.sh`, `verify-package.sh`
 
 All utilities above are also reachable through the unified [`maops` CLI](#cli-usage) at `bin/maops`.
 
@@ -270,6 +284,9 @@ maops config show --format json
 
 maops doctor
 maops doctor --format json
+
+maops integrity
+maops integrity --format json
 ```
 
 Unknown groups or commands print an actionable error and exit with status `2`. Every dispatched command exits with that underlying script's own exit code.
@@ -281,9 +298,11 @@ Unknown groups or commands print an actionable error and exit with status `2`. E
 `maops` defaults to a **user-local** install — never `sudo`, never system-wide by default:
 
 ```bash
-make install                       # installs to $HOME/.local
-make install PREFIX=/opt/maops     # or any custom prefix
-make uninstall                     # removes it again
+make install                                    # installs to $HOME/.local
+make install PREFIX=/opt/maops                  # or any custom prefix
+make install INSTALL_ARGS="--force"             # reinstall/upgrade over an existing install
+make uninstall                                  # removes it again
+make uninstall UNINSTALL_ARGS="--purge-config"  # also remove the configuration directory
 ```
 
 Default layout under `PREFIX` (`$HOME/.local` unless overridden):
@@ -295,9 +314,10 @@ PREFIX/lib/maops/scripts/
 PREFIX/lib/maops/LICENSE
 PREFIX/lib/maops/CHANGELOG.md
 PREFIX/lib/maops/.install-manifest
+PREFIX/lib/maops/.integrity-manifest
 ```
 
-Install stages the whole runtime tree in a temporary directory under `PREFIX/lib` before ever replacing anything, refuses to overwrite an unrelated file it finds at `PREFIX/bin/maops` (even with `--force`), and records every installed path in `.install-manifest` so `uninstall.sh` only ever removes files it verifiably owns. Re-running install over an existing MAOps installation requires `--force`; your configuration file (outside `PREFIX` entirely) is untouched by both install and uninstall unless you pass `--purge-config` to uninstall. See [docs/architecture.md §11](docs/architecture.md#11-installation-and-runtime-layout) for the full design and threat model.
+Install stages the whole runtime tree in a temporary directory under `PREFIX/lib` before ever replacing anything, refuses to overwrite an unrelated file it finds at `PREFIX/bin/maops` (even with `--force`), and records every installed path in `.install-manifest` so `uninstall.sh` only ever removes files it verifiably owns — scoped to `PREFIX/lib/maops` specifically, never a sibling directory under a shared `PREFIX`. Re-running install over an existing MAOps installation requires `--force`; your configuration file (outside `PREFIX` entirely) is untouched by both install and uninstall unless you pass `--purge-config` to uninstall. Install works both from a Git checkout and from an already-extracted release archive (verifying `MAOPS-MANIFEST.tsv` before copying anything in the latter case) — every installed file's permission mode is derived from Git's index or the package manifest, never from the source filesystem's own `stat` (relevant on WSL/drvfs, where `stat` misreports tracked-file permissions). See [docs/architecture.md §11](docs/architecture.md#11-installation-and-runtime-layout) for the full design and threat model.
 
 ---
 
@@ -325,6 +345,19 @@ maops doctor --format json | python3 -m json.tool
 ```
 
 Exits `0` when every required check passes, `1` if a required command or an existing-but-invalid config fails. Missing optional development tools (`git`, `make`, `shellcheck`, `bats`, `python3`) are warnings, never failures. See [docs/architecture.md §14](docs/architecture.md#14-doctor-command) for the full check list.
+
+---
+
+# Integrity
+
+`maops integrity` is a read-only, never-repairing check that verifies what's actually on disk against what it's supposed to be — an installed tree against `PREFIX/lib/maops/.integrity-manifest`, or a source-tree checkout directly against Git's tracked index (never against working-tree `stat`, which is not trustworthy on WSL/drvfs):
+
+```bash
+maops integrity
+maops integrity --format json | python3 -m json.tool
+```
+
+Exits `0` when every file matches, `1` if any file is missing, has modified content, has an unexpected mode, or the manifest itself is malformed — or if neither an installed manifest nor Git metadata is available at all. `maops integrity` never modifies or repairs anything; see [docs/architecture.md §16](docs/architecture.md#16-integrity-verification-maops-integrity) for the full verification model and [docs/troubleshooting.md §17](docs/troubleshooting.md#17-interpreting-a-maops-integrity-failure) for how to interpret a failure.
 
 ---
 
@@ -389,9 +422,13 @@ Release and install-specific checks are separate, filesystem-heavier targets not
 
 ```bash
 make package         # build dist/*.tar.gz and its .sha256 checksum
-make verify-package  # verify the checksum and archive integrity
-make smoke-install   # install to a temporary prefix, run the CLI + doctor, then uninstall
+make verify-package  # verify the checksum, archive-member safety, and internal manifest
+make smoke-install   # install to a temporary prefix, run the CLI + doctor + integrity, then uninstall
+make integrity       # run `maops integrity` against the source tree
+make release-check   # quality -> package -> verify-package -> smoke-install, in order
 ```
+
+`make release-check` is the single command CI runs — reproduce it locally before pushing to catch anything CI would catch.
 
 ---
 
@@ -441,6 +478,7 @@ This project follows:
 - [x] Configuration system with precedence resolution and JSON output
 - [x] Doctor diagnostic command
 - [x] Installation and packaging
+- [x] Release integrity hardening (Git-index mode normalization, internal release manifest, hardened archive verification, `maops integrity`)
 - [ ] Architecture diagrams
 - [ ] Medium technical article
 

@@ -9,7 +9,6 @@
 #               or a launcher symlink that belongs to a given install.
 # Author      : Raiyan Yousuf
 # Project     : MAOps Linux DevOps Toolkit
-# Version     : 0.4.0
 #
 ###############################################################################
 

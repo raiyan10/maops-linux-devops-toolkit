@@ -6,7 +6,6 @@
 # Description : Read-only top-N process report, sorted by CPU or memory use
 # Author      : Raiyan Yousuf
 # Project     : MAOps Linux DevOps Toolkit
-# Version     : 0.3.0
 #
 ###############################################################################
 

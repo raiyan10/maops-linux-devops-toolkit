@@ -9,7 +9,6 @@
 #               runs an unrestricted rm -rf against a user-supplied path.
 # Author      : Raiyan Yousuf
 # Project     : MAOps Linux DevOps Toolkit
-# Version     : 0.4.0
 #
 ###############################################################################
 
@@ -22,6 +21,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$REPO_ROOT/scripts/common/bootstrap.sh"
 # shellcheck source=scripts/install/lib.sh
 source "$SCRIPT_DIR/lib.sh"
+# shellcheck source=scripts/common/integrity.sh
+source "$REPO_ROOT/scripts/common/integrity.sh"
 
 PURGE_CONFIG=0
 ASSUME_YES=0
@@ -139,7 +140,16 @@ read_manifest_files() {
     MANIFEST_FILES=()
     while IFS= read -r line || [[ -n "$line" ]]; do
         if ((in_files)); then
-            [[ -n "$line" ]] && MANIFEST_FILES+=("$line")
+            # A blank line inside the file-list section is never written by
+            # install.sh's write_manifest -- treat it as a malformed/tampered
+            # manifest and abort immediately (with a clear message) rather
+            # than silently skip it, which is what the task's "reject empty
+            # entries" requirement calls for.
+            if [[ -z "$line" ]]; then
+                log_error "Malformed manifest: empty file entry."
+                exit 1
+            fi
+            MANIFEST_FILES+=("$line")
         elif [[ "$line" == "--- files ---" ]]; then
             in_files=1
         fi
@@ -169,20 +179,60 @@ confirm_removal() {
 }
 
 ###############################################################################
-# Removal
+# Manifest validation (read-only; runs before anything is removed)
 ###############################################################################
 
-remove_files() {
+# validate_manifest_files
+# Validates every entry in MANIFEST_FILES before remove_files() ever calls
+# rm. Fails closed on the whole manifest -- a single unsafe, malformed, or
+# duplicate entry aborts the entire uninstall with zero files removed,
+# rather than skipping just the bad entry. Entries are restricted to
+# LIB_DIR specifically (not merely PREFIX), since PREFIX is frequently a
+# shared location (e.g. $HOME/.local) hosting other tools' files under
+# sibling directories like PREFIX/bin or PREFIX/share that this manifest
+# must never be able to reach.
+validate_manifest_files() {
     local path
+    local -A seen=()
+
     for path in "${MANIFEST_FILES[@]}"; do
+        if [[ -z "$path" ]]; then
+            log_error "Malformed manifest: empty file entry."
+            exit 1
+        fi
+
         case "$path" in
-            "$PREFIX"/*) : ;;
+            "$LIB_DIR"/*) : ;;
             *)
-                log_error "Refusing to remove out-of-prefix path from manifest: $path"
+                log_error "Refusing manifest entry outside $LIB_DIR: $path"
                 exit 1
                 ;;
         esac
 
+        if integrity_path_has_dotdot_component "$path"; then
+            log_error "Refusing manifest entry with path traversal: $path"
+            exit 1
+        fi
+
+        if [[ -n "${seen[$path]:-}" ]]; then
+            log_error "Duplicate manifest entry: $path"
+            exit 1
+        fi
+        seen[$path]=1
+    done
+}
+
+###############################################################################
+# Removal
+###############################################################################
+
+# remove_files
+# Assumes validate_manifest_files has already verified every path is
+# well-formed and confined to LIB_DIR -- this loop only checks existence
+# before removing, it never re-derives safety here.
+remove_files() {
+    local path
+    for path in "${MANIFEST_FILES[@]}"; do
         if [[ -e "$path" || -L "$path" ]]; then
             rm -f -- "$path"
         fi
@@ -212,6 +262,18 @@ remove_launcher() {
 
 purge_config() {
     local cfg_dir="${XDG_CONFIG_HOME:-$HOME/.config}/maops"
+
+    # The same "never operate on/near the filesystem root" discipline
+    # parse_args already applies to PREFIX -- an empty or unset
+    # HOME/XDG_CONFIG_HOME would otherwise resolve cfg_dir to "/maops" or
+    # "/.config/maops", uncomfortably close to the root for an rm -rf.
+    case "$cfg_dir" in
+        /maops | /.config/maops | "")
+            log_error "Refusing to purge an unsafe configuration path: ${cfg_dir:-<empty>}"
+            exit 1
+            ;;
+    esac
+
     if [[ -d "$cfg_dir" ]]; then
         rm -rf -- "$cfg_dir"
         log_info "Removed configuration directory: $cfg_dir"
@@ -235,9 +297,11 @@ main() {
         exit 1
     fi
 
+    read_manifest_files "$MANIFEST"
+    validate_manifest_files
+
     confirm_removal
 
-    read_manifest_files "$MANIFEST"
     remove_files
     remove_launcher
     rm -f -- "$MANIFEST"
