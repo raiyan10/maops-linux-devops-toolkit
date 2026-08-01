@@ -126,23 +126,31 @@ stub_shadow_path_except() {
 # This reproduces the *observed symptom* deterministically on any host,
 # including a normal ext4 CI runner, without needing an actual drvfs mount.
 #
-# Callers follow this with `(cd "$dest" && git add -A)`. Today that call is
-# a no-op for the mode question specifically, since `.git` (copied above)
-# already carries this repo's own `core.fileMode=false` local setting, so
-# `git ls-files -s` inside the fixture never picks up the `chmod -R 0777`
-# as an index-mode change regardless of the host's own git defaults. It is
-# kept as defensive/correct usage, not redundant boilerplate: it *does*
-# matter the moment a fixture-consuming test starts editing tracked file
-# *content* inside the fixture (see the "reports a modified tracked
-# release file" tests) rather than only mode, since integrity-check.sh's
-# source-tree mode compares the working tree against the index via `git
-# diff`, and any genuinely new/staged content needs `git add` to be
-# reflected there.
+# Callers follow this with `(cd "$dest" && git add -A)`. That call is a
+# no-op for the mode question specifically because the fixture's own
+# `core.fileMode` is force-set to false below -- never inherited from
+# `.git` (copied above), since the *host* repo's `core.fileMode` is
+# environment-dependent (e.g. false on a WSL/drvfs checkout, but the real
+# git default of true on a fresh CI checkout on ext4). Without pinning it
+# here, `git add -A` on a true-default host would re-stage the forced
+# `chmod -R 0777` as a genuine 100755 index mode on every file, corrupting
+# the very index `git ls-files -s` reads and defeating the fixture's
+# purpose. Pinning it explicitly is what makes the *observed symptom*
+# (stat lies, index stays correct) reproduce deterministically on any
+# host, including a normal ext4 CI runner, without needing an actual
+# drvfs mount. The `git add -A` call is kept as defensive/correct usage,
+# not redundant boilerplate: it *does* matter the moment a
+# fixture-consuming test starts editing tracked file *content* inside the
+# fixture (see the "reports a modified tracked release file" tests)
+# rather than only mode, since integrity-check.sh's source-tree mode
+# compares the working tree against the index via `git diff`, and any
+# genuinely new/staged content needs `git add` to be reflected there.
 build_drvfs_clone_fixture() {
     local dest="$1"
     mkdir -p -- "$dest"
     cp -a -- "$REPO_ROOT/." "$dest/"
     rm -rf -- "$dest/dist"
+    git -C "$dest" config core.fileMode false
     find "$dest" -exec chmod 0777 {} +
 }
 

@@ -486,10 +486,14 @@ and the one optional network-adjacent check stays on loopback.
 `tests/test-helper.bash` also provides `build_drvfs_clone_fixture` (a plain
 filesystem copy of the repository — not `git clone`, so any change currently
 staged-but-uncommitted in the working tree/index is carried over exactly —
-with every path forced to `chmod 0777` afterward) so mode-normalization
-tests can deterministically reproduce the WSL/drvfs `0777`-observed-
-permission symptom on any host, including a normal CI runner, without
-needing an actual drvfs mount; and `craft_tar_with_member` (built on
+with the fixture's own `core.fileMode` pinned to `false` explicitly (never
+inherited from the host repository's `.git/config`, which is
+environment-dependent) before every path is forced to `chmod 0777`
+afterward) so mode-normalization tests can deterministically reproduce the
+WSL/drvfs `0777`-observed-permission symptom on any host, including a
+normal CI runner, without needing an actual drvfs mount — see
+[troubleshooting.md §18](troubleshooting.md#18-build_drvfs_clone_fixture-bats-tests-pass-on-wsl-but-fail-on-a-real-ci-runner)
+for the CI-only failure this pin fixes; and `craft_tar_with_member` (built on
 Python's stdlib `tarfile` module — the same module `verify-package.sh` uses
 to inspect real archives) for constructing crafted symlink/hardlink/device/
 FIFO archive-attack fixtures.

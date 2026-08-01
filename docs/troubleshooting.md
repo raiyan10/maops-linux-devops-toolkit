@@ -188,6 +188,11 @@ expected-vs-actual mode, and if it's clean, the problem is likely in a
 custom fork of `package.sh`/`install.sh` that reintroduced `cp -a`
 somewhere, not in the filesystem mounting behavior itself.
 
+**This also affects the Bats tests that simulate drvfs.** If a
+`build_drvfs_clone_fixture`-based test passes locally but fails only in CI,
+that's a different, test-only manifestation of the same `core.fileMode`
+sensitivity — see [§18](#18-build_drvfs_clone_fixture-bats-tests-pass-on-wsl-but-fail-on-a-real-ci-runner).
+
 ---
 
 ## 5. SC1091
@@ -315,6 +320,7 @@ independently. Reproduce each one locally before re-pushing:
 | Validate Bash syntax | `make validate` | A real syntax error — unclosed quote/brace, bad `case` statement |
 | Run ShellCheck | `make lint` | A ShellCheck warning/error at default severity; see [SC1091](#5-sc1091) / [SC2317](#6-sc2317) above for the two info-level notices this project has already reasoned about |
 | Verify executable modes | `make check-executable` | A script committed as `100644` instead of `100755` — see [§4](#4-wsl-and-windows-git-executable-mode-behavior) above, most commonly caused by committing from a WSL `drvfs` mount |
+| Run the Bats suite | `make test` | A genuine test regression, or — if the failing test passes locally on WSL but fails only in CI and involves `build_drvfs_clone_fixture` — see [§18](#18-build_drvfs_clone_fixture-bats-tests-pass-on-wsl-but-fail-on-a-real-ci-runner) |
 | Install ShellCheck | — | Runner-side `apt-get` failure (transient); re-run the job |
 
 `make quality` runs the first three in sequence and is the fastest way to
@@ -612,3 +618,71 @@ there is no `--repair` flag and there will not be one; the fix for every
 category above is either to reinstall from a trusted source (installed
 mode) or to reconcile the working tree with Git directly (source-tree
 mode), never to have the tool silently patch files it doesn't fully trust.
+
+---
+
+## 18. `build_drvfs_clone_fixture` Bats Tests Pass on WSL but Fail on a Real CI Runner
+
+**Symptom:** `tests/release/package.bats`, `tests/diagnostics/integrity-check.bats`,
+and `tests/install/install.bats`'s "drvfs simulation" / "observed permissions
+are 0777" tests all pass in a local WSL/drvfs checkout, but the same tests
+fail on GitHub Actions' `ubuntu-latest` runner with output like:
+
+```text
+not ok 101 manifest and archived file modes are correct even from a drvfs-simulated (0777) source tree
+#   `[[ "$output" == -rw-r--r--* ]]' failed
+not ok 144 healthy source tree passes with exit 0, even when observed permissions are 0777
+#   `[ "$status" -eq 0 ]' failed
+```
+
+`make test`'s failure itself is reported generically as
+`make: *** [Makefile:64: test] Error 123` regardless of which test actually
+failed — that line number is just where `xargs` (which runs `bats`) sits in
+the `test` recipe, not the failing test's location. Always scroll up to the
+first `not ok` line for the real cause; the `# (in test file ...)` and
+`# ... failed` lines immediately below it name the actual assertion.
+
+**Cause:** `build_drvfs_clone_fixture` (`tests/test-helper.bash`) simulates
+the drvfs symptom described in [§4](#4-wsl-and-windows-git-executable-mode-behavior)
+by copying the repository (including `.git`) into a scratch directory and
+force-`chmod`-ing every file to `0777`. Every consuming test then runs `git
+add -A` inside that fixture. Whether that `git add -A` actually re-records
+the fake `0777` executable bit into the fixture's Git index depends on the
+fixture's own `core.fileMode` setting — and until this was fixed, the
+fixture never set that explicitly, so it inherited whatever `core.fileMode`
+the *host* repository happened to have:
+
+- On a WSL/drvfs checkout, Git commonly auto-detects the mount's unreliable
+  permission bits and sets `core.fileMode=false` locally. `git add -A`
+  is then a genuine no-op for modes, so the fixture's index stays correct
+  and the test reproduces the intended symptom: `stat` reports `0777`, but
+  Git's index (the only thing `git ls-files -s` and `git diff --quiet`
+  actually consult) still has the real `100644`/`100755` mode.
+- On a fresh GitHub Actions checkout (real ext4), `core.fileMode` defaults
+  to `true`. `git add -A` then genuinely re-stages the forced `0777` as
+  `100755` on every file, corrupting the fixture's index for real — so the
+  code under test (correctly) reports the corruption it's designed to
+  catch, and the test fails.
+
+The production code (`scripts/common/integrity.sh`, `package.sh`,
+`install.sh`, `integrity-check.sh`) was never the problem here — this was a
+test-fixture bug, not a mode-normalization bug.
+
+**Fix:** `build_drvfs_clone_fixture` now pins the fixture's own
+`core.fileMode` explicitly instead of relying on inheritance:
+
+```bash
+git -C "$dest" config core.fileMode false
+```
+
+This makes the fixture reproduce the *observed symptom* deterministically
+on any host — including a normal ext4 CI runner — without needing an actual
+drvfs mount, which was always the fixture's stated intent.
+
+**If you're debugging a similar "passes locally, fails in CI" Bats
+failure:** check whether the failing test touches Git mode at all, and if
+so, compare `git config --get core.fileMode` between your local checkout
+and a fresh clone (`git config --get core.fileMode` prints nothing at all
+if it's unset, which behaves as `true`). A test or fixture that assumes a
+particular `core.fileMode` value without setting it explicitly will drift
+by environment exactly like this one did.

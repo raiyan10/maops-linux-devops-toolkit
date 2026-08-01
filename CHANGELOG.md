@@ -29,6 +29,7 @@ The project follows Semantic Versioning.
 ### Fixed
 
 - `tests/monitoring/monitoring-tools.bats`: the three "fails when `<dep>` is unavailable" tests (`free`/`lscpu`/`uptime`) now assert their expected `127` exit via `run -127`, and the file declares `bats_require_minimum_version 1.5.0`, eliminating the `BW01`/`BW02` advisory warnings Bats printed on every run even though all tests passed.
+- `tests/test-helper.bash`'s `build_drvfs_clone_fixture` now pins the fixture's own `core.fileMode=false` explicitly instead of inheriting whatever value the host repository's `.git/config` happened to have. The four `build_drvfs_clone_fixture`-based tests in `tests/release/package.bats`, `tests/diagnostics/integrity-check.bats`, and `tests/install/install.bats` passed on the author's WSL/drvfs checkout (where `core.fileMode` is locally `false`) but failed on GitHub Actions' real ext4 runner (where it defaults to `true`): without the explicit pin, the fixture's own `git add -A` re-staged its forced `chmod -R 0777` as a genuine `100755` index mode on every file, corrupting the very index the mode-normalization code under test reads from. See [troubleshooting.md §18](docs/troubleshooting.md#18-build_drvfs_clone_fixture-bats-tests-pass-on-wsl-but-fail-on-a-real-ci-runner).
 
 ## [0.4.0] - 2026-07-31
 
