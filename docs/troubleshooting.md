@@ -173,6 +173,21 @@ the first place. See
 [best-practices.md](best-practices.md#9-git-executable-modes-under-wsl) for
 the underlying convention.
 
+**This used to affect packaged/installed output too, not just CI.** Before
+Day 6, `package.sh`/`install.sh` staged files with `cp -a`, which copied
+whatever mode the *source* filesystem reported — `0777` on `drvfs`,
+regardless of what git had recorded. If you built a release or ran
+`install.sh` directly from a `/mnt/c/...`/`/mnt/f/...` checkout, the
+packaged/installed files could end up world-writable even though `git
+ls-files -s` showed the correct mode all along. This is fixed: staging now
+derives every mode from `git ls-files -s` exclusively and never consults
+`stat` on the source tree. If you still see an unexpected mode in a
+freshly-built `dist/*.tar.gz` or freshly-installed tree, run `maops
+integrity` (§17 below) against it — it will name the exact file and the
+expected-vs-actual mode, and if it's clean, the problem is likely in a
+custom fork of `package.sh`/`install.sh` that reintroduced `cp -a`
+somewhere, not in the filesystem mounting behavior itself.
+
 ---
 
 ## 5. SC1091
@@ -531,3 +546,69 @@ editing an existing one — the checksum file is regenerated alongside it, so
 the two always match a freshly built pair. If you need to confirm two builds
 from the same source tree are identical, compare their SHA-256 sums directly
 rather than editing either archive in place.
+
+**A second, independent check can also fail even when the checksum passes.**
+Since Day 6, `verify-package.sh` also validates the archive's internal
+`MAOPS-MANIFEST.tsv` — every distributed file's mode, SHA-256 content, and
+presence — *after* the external `.sha256` check. If you see a failure
+naming a specific file (`Content mismatch for manifest entry: ...`, `Mode
+mismatch for manifest entry: ...`, or `Extra distributed file not listed in
+manifest: ...`) rather than a generic checksum-mismatch message, the archive
+passed the whole-file checksum but a file inside it doesn't match what the
+manifest says it should be — this can only happen if the archive was
+rebuilt or edited by hand after the fact (e.g. re-tarring an extracted copy
+with a stale `MAOPS-MANIFEST.tsv`, or editing a file post-extraction and
+re-packing). The fix is the same: rebuild from source with `make package`,
+never hand-edit an archive's contents.
+
+**A crafted or corrupted archive can also fail before extraction even
+runs**, with a message like `Refusing archive with an unsafe member path`,
+`disallowed member type for: ...`, or `multiple top-level roots in
+archive`. This means the archive contains a member `verify-package.sh`
+refuses to trust on principle — an absolute path, a `..` traversal
+component, a symlink/hardlink/device/FIFO member, or more than one
+top-level directory — and is refusing to extract it at all rather than
+attempting to sanitize it. A legitimately-built archive from `make package`
+never produces any of these; seeing one means the archive did not come from
+this project's own build, or was tampered with after the fact.
+
+---
+
+## 17. Interpreting a `maops integrity` Failure
+
+**Symptom:** `maops integrity` exits `1` and reports one or more entries
+with a `category` of `missing`, `modified`, `unexpected-mode`, or
+`malformed-manifest`.
+
+**What each category means:**
+
+- **`missing`** — a file the manifest expects is not present. In an
+  installed tree, something deleted a file under `PREFIX/lib/maops` after
+  install; reinstall (`make install` / `install.sh --force`) to restore it.
+  In a source-tree checkout, a Git-tracked release file is missing from the
+  working tree — `git status`/`git checkout -- <path>` will show and fix it.
+- **`modified`** — the file exists but its content doesn't match. In an
+  installed tree, this means something edited an installed file directly
+  (installed files are meant to be treated as read-only; edit the source and
+  reinstall instead). In a source-tree checkout, it means uncommitted local
+  changes to a tracked release file — expected during development, worth a
+  second look if unexpected.
+- **`unexpected-mode`** — content matches, but the permission bits don't.
+  In an installed tree, something ran `chmod` on an installed file directly.
+  In a source-tree checkout, it means Git's *index* mode itself is wrong for
+  that path (see §4 above) — `unexpected-mode` here is about what Git has
+  recorded, never about working-tree `stat`, so fixing the working tree's
+  permissions alone will not clear it; use `git update-index --chmod`.
+- **`malformed-manifest`** — the manifest file itself couldn't be parsed
+  (wrong field count, invalid mode, non-hex/wrong-length checksum, an unsafe
+  path, or a duplicate entry). In an installed tree, this generally means
+  `.integrity-manifest` was hand-edited or corrupted — reinstall to
+  regenerate it. `maops integrity` never repairs anything itself, in any
+  category — it only reports.
+
+**Fix, in general:** `maops integrity` is diagnostic-only by design (see
+[architecture.md §16](architecture.md#16-integrity-verification-maops-integrity)) —
+there is no `--repair` flag and there will not be one; the fix for every
+category above is either to reinstall from a trusted source (installed
+mode) or to reconcile the working tree with Git directly (source-tree
+mode), never to have the tool silently patch files it doesn't fully trust.

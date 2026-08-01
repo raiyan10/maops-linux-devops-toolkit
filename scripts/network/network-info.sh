@@ -7,7 +7,6 @@
 #               gateway, and configured DNS resolvers
 # Author      : Raiyan Yousuf
 # Project     : MAOps Linux DevOps Toolkit
-# Version     : 0.2.0
 #
 ###############################################################################
 

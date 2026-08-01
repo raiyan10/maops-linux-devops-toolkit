@@ -165,12 +165,21 @@ setup() {
 # --- output format -----------------------------------------------------
 
 @test "doctor --format text output is identical to the no-flag default" {
+    # Strips the leading "[YYYY-MM-DD HH:MM:SS]" timestamp from the final
+    # log line before comparing: on a slow enough host, two consecutive
+    # script invocations can cross a one-second boundary, which would
+    # otherwise make this comparison flaky through no fault of doctor.sh
+    # itself (see the identical fix applied to integrity-check.bats).
     stub_shadow_path_except
     run "$REAL_BASH" "$SCRIPT"
-    local default_output="$output"
+    local default_output
+    default_output="$(sed -E 's/^\[[0-9-]+ [0-9:]+\]//' <<<"$output")"
 
     run "$REAL_BASH" "$SCRIPT" --format text
-    [ "$output" = "$default_output" ]
+    local this_output
+    this_output="$(sed -E 's/^\[[0-9-]+ [0-9:]+\]//' <<<"$output")"
+
+    [ "$this_output" = "$default_output" ]
 }
 
 @test "doctor --format json emits exactly one valid JSON document on the healthy path" {

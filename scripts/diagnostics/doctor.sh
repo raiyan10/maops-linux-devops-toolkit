@@ -9,7 +9,6 @@
 #               version-string, or local file-existence read.
 # Author      : Raiyan Yousuf
 # Project     : MAOps Linux DevOps Toolkit
-# Version     : 0.4.0
 #
 ###############################################################################
 

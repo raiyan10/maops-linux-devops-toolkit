@@ -11,7 +11,6 @@
 #               effects when sourced.
 # Author      : Raiyan Yousuf
 # Project     : MAOps Linux DevOps Toolkit
-# Version     : 0.4.0
 #
 ###############################################################################
 

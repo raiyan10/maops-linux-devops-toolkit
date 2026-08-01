@@ -197,3 +197,35 @@ setup() {
     [ "$status" -eq 2 ]
     [[ "$output" == *"Unknown option"* ]]
 }
+
+# --- Day 6: integrity dispatch route ---------------------------------------
+
+@test "maops --help lists the integrity command" {
+    run "$MAOPS_BIN" --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"integrity"* ]]
+}
+
+@test "maops integrity dispatches to integrity-check.sh and forwards its exit code" {
+    run "$MAOPS_BIN" integrity
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"MAOps Integrity Check"* ]]
+}
+
+@test "maops integrity --format json forwards the flag through the dispatcher" {
+    run "$MAOPS_BIN" integrity --format json
+    [ "$status" -eq 0 ]
+    printf '%s' "$output" | python3 -c 'import json,sys; json.load(sys.stdin)'
+}
+
+@test "maops integrity --nonsense forwards integrity-check.sh's own usage error and exit code" {
+    run "$MAOPS_BIN" integrity --nonsense
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Unknown option"* ]]
+}
+
+@test "unknown command lists integrity among the expected commands" {
+    run "$MAOPS_BIN" bogus
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"integrity"* ]]
+}

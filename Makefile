@@ -2,10 +2,12 @@ SHELL := /usr/bin/env bash
 .SHELLFLAGS := -eu -o pipefail -c
 
 PREFIX ?= $(HOME)/.local
+INSTALL_ARGS ?=
+UNINSTALL_ARGS ?=
 
 .PHONY: help validate lint check-executable quality test run cli-help \
-        config-init doctor install uninstall package verify-package \
-        smoke-install clean
+        config-init doctor integrity install uninstall package verify-package \
+        smoke-install release-check clean
 
 help:
 	@echo "MAOps Linux DevOps Toolkit"
@@ -20,11 +22,13 @@ help:
 	@echo "  cli-help          Run 'maops --help'"
 	@echo "  config-init       Run 'maops config init'"
 	@echo "  doctor            Run 'maops doctor'"
-	@echo "  install           Install to PREFIX (default: \$$HOME/.local)"
-	@echo "  uninstall         Uninstall from PREFIX (default: \$$HOME/.local)"
+	@echo "  integrity         Run 'maops integrity' against the source tree"
+	@echo "  install           Install to PREFIX (default: \$$HOME/.local); extra flags via INSTALL_ARGS"
+	@echo "  uninstall         Uninstall from PREFIX (default: \$$HOME/.local); extra flags via UNINSTALL_ARGS"
 	@echo "  package           Build dist/*.tar.gz and its .sha256 checksum"
 	@echo "  verify-package    Verify the current release package"
 	@echo "  smoke-install     Install/verify/uninstall against a temporary prefix"
+	@echo "  release-check     Run quality, package, verify-package, smoke-install in order"
 	@echo "  clean             Remove generated temporary files and dist/"
 
 validate:
@@ -78,11 +82,14 @@ config-init:
 doctor:
 	@./bin/maops doctor
 
+integrity:
+	@./bin/maops integrity
+
 install:
-	@./scripts/install/install.sh --prefix "$(PREFIX)"
+	@./scripts/install/install.sh --prefix "$(PREFIX)" $(INSTALL_ARGS)
 
 uninstall:
-	@./scripts/install/uninstall.sh --prefix "$(PREFIX)" --yes
+	@./scripts/install/uninstall.sh --prefix "$(PREFIX)" --yes $(UNINSTALL_ARGS)
 
 package:
 	@./scripts/release/package.sh
@@ -91,17 +98,27 @@ verify-package:
 	@./scripts/release/verify-package.sh
 
 smoke-install:
+	@command -v python3 >/dev/null 2>&1 || { \
+		echo "python3 is not installed."; \
+		exit 1; \
+	}
 	@tmp="$$(mktemp -d)"; \
 	trap 'rm -rf -- "$$tmp"' EXIT; \
 	./scripts/install/install.sh --prefix "$$tmp"; \
 	"$$tmp/bin/maops" --version; \
 	"$$tmp/bin/maops" doctor; \
+	"$$tmp/bin/maops" doctor --format json | python3 -m json.tool >/dev/null; \
+	"$$tmp/bin/maops" integrity; \
+	"$$tmp/bin/maops" integrity --format json | python3 -m json.tool >/dev/null; \
 	./scripts/install/uninstall.sh --prefix "$$tmp" --yes; \
 	if [[ -e "$$tmp/lib/maops" ]]; then \
 		echo "smoke-install: cleanup left files behind"; \
 		exit 1; \
 	fi; \
 	echo "smoke-install passed."
+
+release-check: quality package verify-package smoke-install
+	@echo "Release check passed."
 
 clean:
 	@find . -type f \( -name '*.tmp' -o -name '*.log' \) -delete

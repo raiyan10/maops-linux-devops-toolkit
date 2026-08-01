@@ -10,7 +10,6 @@
 #               identify exactly what it owns.
 # Author      : Raiyan Yousuf
 # Project     : MAOps Linux DevOps Toolkit
-# Version     : 0.4.0
 #
 ###############################################################################
 
@@ -23,6 +22,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$REPO_ROOT/scripts/common/bootstrap.sh"
 # shellcheck source=scripts/common/release-files.sh
 source "$REPO_ROOT/scripts/common/release-files.sh"
+# shellcheck source=scripts/common/integrity.sh
+source "$REPO_ROOT/scripts/common/integrity.sh"
 # shellcheck source=scripts/install/lib.sh
 source "$SCRIPT_DIR/lib.sh"
 
@@ -33,6 +34,7 @@ BIN_DIR=""
 LIB_DIR=""
 LAUNCHER=""
 MANIFEST=""
+SOURCE_MODE=""
 
 ###############################################################################
 # Usage
@@ -140,6 +142,53 @@ check_existing_install() {
         log_error "MAOps is already installed at $PREFIX (use --force to reinstall/upgrade)."
         exit 1
     fi
+
+    # LIB_DIR can exist without a manifest (a pre-manifest-era install, a
+    # manually cleaned-up prior install, or unrelated content that happens
+    # to sit there) -- do_install would otherwise move it aside and delete
+    # it unconditionally. Require --force here too, the same discipline
+    # check_launcher_safety already applies to an unrecognized file at
+    # LAUNCHER, rather than treating "no manifest" as "safe to destroy."
+    if [[ -d "$LIB_DIR" ]]; then
+        if ((FORCE)); then
+            return 0
+        fi
+
+        log_error "Refusing to install over existing, unrecognized content at $LIB_DIR (use --force to replace it, or remove it manually first)."
+        exit 1
+    fi
+}
+
+###############################################################################
+# Source-mode detection
+###############################################################################
+
+# install_detect_source_mode
+# Determines whether REPO_ROOT is a Git checkout (mode "git" -- modes are
+# derived from Git's index) or an extracted release archive (mode
+# "archive" -- modes and content are derived from the package's trusted
+# MAOPS-MANIFEST.tsv). Fails closed rather than guessing: neither source
+# present is fatal, and so is both being present at once (a state with no
+# legitimate cause).
+install_detect_source_mode() {
+    local has_git=0 has_manifest=0
+
+    if git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        has_git=1
+    fi
+    [[ -f "$REPO_ROOT/MAOPS-MANIFEST.tsv" ]] && has_manifest=1
+
+    if ((has_git && has_manifest)); then
+        log_error "Ambiguous install source: both a Git checkout and a MAOPS-MANIFEST.tsv are present at $REPO_ROOT."
+        exit 1
+    elif ((has_git)); then
+        SOURCE_MODE="git"
+    elif ((has_manifest)); then
+        SOURCE_MODE="archive"
+    else
+        log_error "Cannot determine install source: no Git checkout and no MAOPS-MANIFEST.tsv found at $REPO_ROOT."
+        exit 1
+    fi
 }
 
 ###############################################################################
@@ -159,38 +208,92 @@ write_manifest() {
     } >"$manifest_tmp"
 }
 
+# install_stage_from_git STAGING
+# Source-tree install: derives every file's mode from Git's index via the
+# same integrity_copy_git_tracked helper package.sh uses, so the two can
+# never disagree on what a "correct" install/package looks like.
+install_stage_from_git() {
+    local staging="$1"
+    local manifest_tmp="$staging/.manifest.tmp"
+
+    if ! integrity_copy_git_tracked "$staging" "$REPO_ROOT" "${RELEASE_FILE_LIST[@]}" >"$manifest_tmp"; then
+        log_error "${INTEGRITY_LAST_ERROR:-Failed to stage Git-tracked release files.}"
+        exit 1
+    fi
+
+    LC_ALL=C sort -o "$staging/.integrity-manifest" "$manifest_tmp"
+    rm -f -- "$manifest_tmp"
+    find "$staging" -type d -exec chmod 0755 {} +
+}
+
+# install_stage_from_archive STAGING
+# Archive install: verifies REPO_ROOT/MAOPS-MANIFEST.tsv -- each entry's
+# source file must exist, and its real SHA-256 (computed from the staged
+# copy, not a separate read of the source) must match -- before that
+# entry's copy is trusted; the first bad entry aborts the whole install
+# before STAGING is ever promoted to a live install. Modes are applied
+# from the manifest's MODE field, never derived from the extracted
+# archive's own stat.
+install_stage_from_archive() {
+    local staging="$1"
+
+    if ! integrity_verify_and_copy_from_manifest "$staging" "$REPO_ROOT" "$REPO_ROOT/MAOPS-MANIFEST.tsv"; then
+        log_error "${INTEGRITY_LAST_ERROR:-Failed to verify the package manifest.}"
+        exit 1
+    fi
+
+    LC_ALL=C sort -o "$staging/.integrity-manifest" "$REPO_ROOT/MAOPS-MANIFEST.tsv"
+    find "$staging" -type d -exec chmod 0755 {} +
+}
+
 do_install() {
     mkdir -p -- "$PREFIX/lib" "$BIN_DIR"
 
     # Staged under $PREFIX/lib (same filesystem as the final destination)
     # so the swap below is a same-filesystem rename, never a cross-device
-    # copy+unlink fallback.
+    # copy+unlink fallback. The EXIT trap ensures a staging directory left
+    # behind by a failed install_stage_from_*/write_manifest call (which
+    # exit directly, without unwinding through here) never accumulates as
+    # stale garbage under $PREFIX/lib.
     local staging
     staging="$(mktemp -d -- "$PREFIX/lib/.maops-staging.XXXXXX")"
+    trap 'rm -rf -- "$staging"' EXIT
 
-    local entry src dest
-    for entry in "${RELEASE_FILE_LIST[@]}"; do
-        src="$REPO_ROOT/$entry"
-        dest="$staging/$entry"
-        mkdir -p -- "$(dirname -- "$dest")"
-        cp -a -- "$src" "$dest"
-    done
+    if [[ "$SOURCE_MODE" == "git" ]]; then
+        install_stage_from_git "$staging"
+    else
+        install_stage_from_archive "$staging"
+    fi
 
     write_manifest "$staging"
 
+    # Re-verify immediately before the first mutation of the live install:
+    # check_launcher_safety already ran once in main(), but the staging
+    # work above takes real time, and a shared/writable PREFIX/bin could
+    # have had something planted at LAUNCHER in that window. Re-checking
+    # here -- before LIB_DIR or LAUNCHER are touched at all -- means a
+    # failure at this point still leaves the install fully untouched,
+    # rather than only re-checking right before ln -sfn, which would leave
+    # LIB_DIR already swapped but the launcher not yet updated on failure.
+    check_launcher_safety
+
     local previous=""
     if [[ -d "$LIB_DIR" ]]; then
-        previous="$LIB_DIR.old.$$"
+        # mktemp -u prints a name guaranteed not to already exist without
+        # creating it, so `mv` below performs the rename onto a fresh,
+        # unpredictable path rather than a PID-suffixed (guessable) one.
+        previous="$(mktemp -d -u -- "$PREFIX/lib/.maops-old.XXXXXX")"
         mv -- "$LIB_DIR" "$previous"
     fi
 
     mv -- "$staging" "$LIB_DIR"
+    trap - EXIT
     ln -sfn -- "../lib/maops/bin/maops" "$LAUNCHER"
 
     # The previous tree is only ever removed after the new one is
     # confirmed live, and only via a name this script itself generated
-    # (a PID-suffixed sibling under $PREFIX/lib) — never a raw rm -rf
-    # against user-supplied input.
+    # (a private mktemp-allocated sibling under $PREFIX/lib) — never a raw
+    # rm -rf against user-supplied input.
     if [[ -n "$previous" && -d "$previous" ]]; then
         rm -rf -- "$previous"
     fi
@@ -201,6 +304,7 @@ do_install() {
 ###############################################################################
 
 main() {
+    install_detect_source_mode
     check_launcher_safety
     check_existing_install
     do_install

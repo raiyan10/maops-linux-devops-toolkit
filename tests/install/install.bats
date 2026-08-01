@@ -16,6 +16,15 @@ setup() {
     unset XDG_CONFIG_HOME MAOPS_CONFIG_FILE
 }
 
+teardown() {
+    # The archive-mode install tests below build a real package via
+    # package.sh, which always writes into the repo's actual (gitignored)
+    # dist/ -- the same shared directory tests/release/package.bats also
+    # uses. Clean up here so a leftover archive never lingers in the working
+    # tree after this file runs, mirroring package.bats's own discipline.
+    rm -rf "$REPO_ROOT/dist"
+}
+
 @test "install.sh --help exits 0" {
     run "$INSTALL" --help
     [ "$status" -eq 0 ]
@@ -239,4 +248,165 @@ setup() {
 
     run "$UNINSTALL" --prefix "$evil" --yes
     [ ! -e "$marker" ]
+}
+
+# --- Day 6: integrity manifest -------------------------------------------
+
+@test "fresh install creates a .integrity-manifest distinct from .install-manifest" {
+    "$INSTALL" --prefix "$PREFIX" >/dev/null
+
+    [ -f "$PREFIX/lib/maops/.integrity-manifest" ]
+    [ -f "$PREFIX/lib/maops/.install-manifest" ]
+    ! diff -q "$PREFIX/lib/maops/.integrity-manifest" "$PREFIX/lib/maops/.install-manifest" >/dev/null
+}
+
+@test ".integrity-manifest lines match MODE<TAB>SHA256<TAB>PATH and are LC_ALL=C sorted" {
+    "$INSTALL" --prefix "$PREFIX" >/dev/null
+    local manifest="$PREFIX/lib/maops/.integrity-manifest"
+
+    run bash -c "grep -vE \$'^(0644|0755)\t[0-9a-f]{64}\t[^\t]+\$' '$manifest'"
+    [ -z "$output" ]
+
+    diff <(cat "$manifest") <(LC_ALL=C sort "$manifest")
+}
+
+@test ".integrity-manifest modes are correct even when the source tree observes 0777 (drvfs simulation)" {
+    build_drvfs_clone_fixture "$BATS_TEST_TMPDIR/fixture"
+    (cd "$BATS_TEST_TMPDIR/fixture" && git add -A)
+
+    "$BATS_TEST_TMPDIR/fixture/scripts/install/install.sh" --prefix "$PREFIX" >/dev/null
+
+    local manifest="$PREFIX/lib/maops/.integrity-manifest"
+    local path
+    for path in bin/maops scripts/common/bootstrap.sh README.md LICENSE; do
+        run grep -P "^$(expected_release_mode "$path" | sed 's/^/0/')\t[0-9a-f]{64}\t${path//\//\\/}\$" "$manifest"
+        [ "$status" -eq 0 ]
+    done
+}
+
+@test "installed file modes are correct even when the source tree observes 0777 (drvfs simulation)" {
+    build_drvfs_clone_fixture "$BATS_TEST_TMPDIR/fixture"
+    (cd "$BATS_TEST_TMPDIR/fixture" && git add -A)
+
+    "$BATS_TEST_TMPDIR/fixture/scripts/install/install.sh" --prefix "$PREFIX" >/dev/null
+
+    local path expected actual
+    for path in bin/maops scripts/common/bootstrap.sh README.md LICENSE; do
+        expected="$(expected_release_mode "$path")"
+        actual="$(stat -c '%a' "$PREFIX/lib/maops/$path")"
+        [ "$actual" = "$expected" ]
+    done
+}
+
+@test ".install-manifest and .integrity-manifest are both removed on uninstall" {
+    "$INSTALL" --prefix "$PREFIX" >/dev/null
+    "$UNINSTALL" --prefix "$PREFIX" --yes >/dev/null
+
+    [ ! -f "$PREFIX/lib/maops/.integrity-manifest" ]
+    [ ! -f "$PREFIX/lib/maops/.install-manifest" ]
+}
+
+# --- Day 6: archive-mode install ------------------------------------------
+
+@test "install.sh installs correctly from an extracted release archive (no .git present)" {
+    local dist="$BATS_TEST_TMPDIR/dist"
+    (cd "$REPO_ROOT" && "$REPO_ROOT/scripts/release/package.sh" >/dev/null)
+    mkdir -p "$dist"
+    cp "$REPO_ROOT/dist/"*.tar.gz "$dist/"
+
+    local extract="$BATS_TEST_TMPDIR/extract"
+    mkdir -p "$extract"
+    tar -xzf "$dist"/*.tar.gz -C "$extract"
+    local pkgdir
+    pkgdir="$(find "$extract" -mindepth 1 -maxdepth 1 -type d)"
+    [ ! -d "$pkgdir/.git" ]
+    [ -f "$pkgdir/MAOPS-MANIFEST.tsv" ]
+
+    run "$pkgdir/scripts/install/install.sh" --prefix "$PREFIX"
+    [ "$status" -eq 0 ]
+
+    run "$PREFIX/bin/maops" doctor
+    [ "$status" -eq 0 ]
+
+    diff <(LC_ALL=C sort "$PREFIX/lib/maops/.integrity-manifest") <(LC_ALL=C sort "$pkgdir/MAOPS-MANIFEST.tsv")
+}
+
+@test "archive-mode install refuses tampered content before installing anything" {
+    local dist="$BATS_TEST_TMPDIR/dist"
+    (cd "$REPO_ROOT" && "$REPO_ROOT/scripts/release/package.sh" >/dev/null)
+    mkdir -p "$dist"
+    cp "$REPO_ROOT/dist/"*.tar.gz "$dist/"
+
+    local extract="$BATS_TEST_TMPDIR/extract"
+    mkdir -p "$extract"
+    tar -xzf "$dist"/*.tar.gz -C "$extract"
+    local pkgdir
+    pkgdir="$(find "$extract" -mindepth 1 -maxdepth 1 -type d)"
+    printf 'TAMPERED\n' >>"$pkgdir/README.md"
+
+    run "$pkgdir/scripts/install/install.sh" --prefix "$PREFIX"
+    [ "$status" -eq 1 ]
+    [ ! -e "$PREFIX/lib/maops" ]
+}
+
+# --- Day 6: uninstall LIB_DIR boundary hardening --------------------------
+
+@test "a manifest entry pointing outside LIB_DIR but still under PREFIX is refused" {
+    "$INSTALL" --prefix "$PREFIX" >/dev/null
+    mkdir -p "$PREFIX/share"
+    printf 'keepme\n' >"$PREFIX/share/keepme.txt"
+    printf '%s\n' "$PREFIX/share/keepme.txt" >>"$PREFIX/lib/maops/.install-manifest"
+
+    run "$UNINSTALL" --prefix "$PREFIX" --yes
+    [ "$status" -eq 1 ]
+    [ -f "$PREFIX/share/keepme.txt" ]
+    [ -d "$PREFIX/lib/maops" ]
+}
+
+@test "a manifest entry with a .. traversal segment is refused" {
+    "$INSTALL" --prefix "$PREFIX" >/dev/null
+    printf '%s\n' "$PREFIX/lib/maops/../../../etc/passwd" >>"$PREFIX/lib/maops/.install-manifest"
+
+    run "$UNINSTALL" --prefix "$PREFIX" --yes
+    [ "$status" -eq 1 ]
+    [ -d "$PREFIX/lib/maops" ]
+}
+
+@test "a duplicate manifest entry is rejected rather than silently double-processed" {
+    "$INSTALL" --prefix "$PREFIX" >/dev/null
+    local dup
+    dup="$(grep -m1 "^$PREFIX" "$PREFIX/lib/maops/.install-manifest")"
+    printf '%s\n' "$dup" >>"$PREFIX/lib/maops/.install-manifest"
+
+    local before after
+    before="$(snapshot_tree "$PREFIX")"
+    run "$UNINSTALL" --prefix "$PREFIX" --yes
+    after="$(snapshot_tree "$PREFIX")"
+
+    [ "$status" -eq 1 ]
+    [ "$before" = "$after" ]
+}
+
+@test "an empty manifest line is treated as malformed, not silently skipped" {
+    "$INSTALL" --prefix "$PREFIX" >/dev/null
+    printf '\n' >>"$PREFIX/lib/maops/.install-manifest"
+
+    run "$UNINSTALL" --prefix "$PREFIX" --yes
+    [ "$status" -eq 1 ]
+    [ -d "$PREFIX/lib/maops" ]
+}
+
+@test "a symlink launcher pointing into a different, unrelated install is left in place" {
+    local prefix1="$BATS_TEST_TMPDIR/prefix1"
+    local prefix2="$BATS_TEST_TMPDIR/prefix2"
+    "$INSTALL" --prefix "$prefix1" >/dev/null
+    "$INSTALL" --prefix "$prefix2" >/dev/null
+
+    rm -- "$prefix1/bin/maops"
+    ln -s -- "$prefix2/lib/maops/bin/maops" "$prefix1/bin/maops"
+
+    run "$UNINSTALL" --prefix "$prefix1" --yes
+    [ "$status" -eq 0 ]
+    [ -L "$prefix1/bin/maops" ]
+    [ "$(readlink "$prefix1/bin/maops")" = "$prefix2/lib/maops/bin/maops" ]
 }

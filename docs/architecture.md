@@ -12,7 +12,7 @@ what is intentionally not built yet.
 ```text
 .
 ├── .claude              # Claude Code project guidance and Skills
-├── .github/workflows    # CI: make quality, package, verify-package, smoke-install
+├── .github/workflows    # CI: make release-check (quality, package, verify-package, smoke-install)
 ├── bin                  # maops — unified CLI dispatcher
 ├── docs                 # This documentation set, plus engineering reviews
 ├── scripts
@@ -223,27 +223,30 @@ from a fail-closed argument parser rather than silently ignoring bad input.
 ## 6. GitHub Actions Validation
 
 `.github/workflows/bash-validation.yml` runs on push and pull request to
-`main`, plus `workflow_dispatch`, with `permissions: contents: read`. It
-installs `shellcheck` and `bats` on the `ubuntu-latest` runner, then runs
-`make quality` directly — CI and local development run the exact same
-command, so nothing can pass locally and still fail in CI (or vice versa) due
-to divergent logic. `make quality` is the umbrella target that chains
-`validate` (Bash syntax via `bash -n`), `lint` (ShellCheck), `check-executable`
-(fails if any tracked `*.sh` file or `bin/maops` is not mode `100755` — this
-is what originally caught the release blocker recorded in
-`docs/engineering-reviews/day-02.md`, finding C1), and `test` (the Bats
-suite). Run `make quality` locally before pushing to reproduce CI exactly.
+`main`, plus `workflow_dispatch`, with `permissions: contents: read` (no
+write permissions, no release/publish permissions). It checks out the
+repository via `actions/checkout` **pinned to a full 40-character commit
+SHA** (`de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2`) rather than a
+mutable tag like `@v4` — a tag can be re-pointed by the action's maintainer
+(or, in a compromise scenario, an attacker) to different code without the
+workflow file itself changing, whereas a commit SHA is immutable. A dedicated
+static regression test, `tests/workflows/actions-pinning.bats`, greps every
+`.github/workflows/*.yml` file and fails if any external (`uses:`, not
+`./`-prefixed) action reference is ever a tag or branch instead of a full SHA
+— catching a future accidental un-pin, not just today's.
 
-After `make quality`, the same job runs `make package`, `make
-verify-package`, and `make smoke-install` (§15, §11) — building a release
-archive, verifying its checksum and contents, and running a full
-install/doctor/uninstall cycle against a temporary prefix — with `HOME`
-overridden to a runner-scoped temporary directory for the smoke-install step
-specifically, so it can never touch the runner's real home. `python3` is
-also installed alongside `shellcheck`/`bats`, since the config/doctor Bats
-suites validate JSON output with it. None of these steps publish or upload
-anything — they build and verify locally within the job — so no separate
-pull-request-vs-push conditional is needed.
+The job installs `shellcheck`, `bats`, and `python3` on the `ubuntu-latest`
+runner, then runs a single command: **`make release-check`** — CI and local
+development run the exact same command, so nothing can pass locally and
+still fail in CI (or vice versa) due to divergent logic. `make release-check`
+chains, in order: `quality` (`validate` → `lint` → `check-executable` → the
+full Bats suite), `package`, `verify-package`, and `smoke-install` (§11, §15,
+§16). `HOME` is overridden to a runner-scoped temporary directory for the
+entire `make release-check` step, so nothing in it — including the
+smoke-install's install/doctor/integrity/uninstall cycle, which itself uses
+its own `mktemp -d` prefix — can ever touch the runner's real home. None of
+these steps publish or upload anything, so no separate pull-request-vs-push
+conditional is needed.
 
 ---
 
@@ -472,11 +475,24 @@ normal argv elements or `awk -v` values.
 
 `tests/` holds the Bats suite (`tests/test-helper.bash` plus `tests/cli/`,
 `tests/common/`, `tests/network/`, `tests/users/`, `tests/process/`,
-`tests/service/`). It is intentionally excluded from `bash -n`/ShellCheck
+`tests/service/`, `tests/system/`, `tests/monitoring/`, `tests/filesystem/`,
+`tests/diagnostics/`, `tests/install/`, `tests/release/`,
+`tests/workflows/`). It is intentionally excluded from `bash -n`/ShellCheck
 (`.bats` files aren't plain Bash) and instead run via `make test`, which is
 itself one stage of `make quality`. No test depends on real internet
 access — invalid-input tests are rejected before any network call is made,
 and the one optional network-adjacent check stays on loopback.
+
+`tests/test-helper.bash` also provides `build_drvfs_clone_fixture` (a plain
+filesystem copy of the repository — not `git clone`, so any change currently
+staged-but-uncommitted in the working tree/index is carried over exactly —
+with every path forced to `chmod 0777` afterward) so mode-normalization
+tests can deterministically reproduce the WSL/drvfs `0777`-observed-
+permission symptom on any host, including a normal CI runner, without
+needing an actual drvfs mount; and `craft_tar_with_member` (built on
+Python's stdlib `tarfile` module — the same module `verify-package.sh` uses
+to inspect real archives) for constructing crafted symlink/hardlink/device/
+FIFO archive-attack fixtures.
 
 The user, process, and service test files additionally depend on
 deterministic PATH-based command stubs, since real `getent`/`id`/`who`/`ps`/
@@ -510,6 +526,7 @@ PREFIX/lib/maops/scripts/
 PREFIX/lib/maops/LICENSE
 PREFIX/lib/maops/CHANGELOG.md
 PREFIX/lib/maops/.install-manifest
+PREFIX/lib/maops/.integrity-manifest
 ```
 
 **Shared file list.** Both `install.sh` and `scripts/release/package.sh`
@@ -517,16 +534,43 @@ PREFIX/lib/maops/.install-manifest
 `RELEASE_FILE_LIST` (`bin/maops`, `scripts/`, `templates/script-template.sh`,
 `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `LICENSE`, `Makefile`,
 `.gitattributes`), so the installed tree and the released tarball can never
-drift apart. `install.sh` does not depend on `git`, so it works identically
-whether run from a git checkout or an extracted release tarball — it
-resolves its own location the same way `bin/maops` does (§7) and copies
-relative to that.
+drift apart.
+
+**Two install sources, two mode authorities.** `install_detect_source_mode`
+looks at `REPO_ROOT` (install.sh's own resolved location, same trick as
+`bin/maops`, §7) and picks exactly one of two modes, refusing outright if
+both or neither apply:
+
+- **Git checkout** (`.git` present): every file's filesystem mode is derived
+  from Git's own index (`git ls-files -s`; `100644` → `0644`, `100755` →
+  `0755`) via the shared `integrity_copy_git_tracked` helper in
+  `scripts/common/integrity.sh` — the *same* helper `package.sh` uses (§15),
+  so the two can never disagree about what a correct mode is. This is
+  deliberate: on a filesystem such as WSL/drvfs, `stat` reports `0777` for
+  every tracked file regardless of Git's real index mode, so trusting the
+  source tree's own `stat` (the old behavior, via `cp -a`) could silently
+  ship world-writable installed files. `cp -a` is not used anywhere in this
+  path; every copy is a plain `cp` followed by an explicit,
+  self-verifying `chmod` (`integrity_chmod_verified`, which re-reads the
+  mode back via `stat` and aborts loudly if the destination filesystem
+  silently ignored the change, rather than allowing an install that only
+  looks correct).
+- **Extracted release archive** (`MAOPS-MANIFEST.tsv` present, no `.git`):
+  every entry in the manifest is verified — source file exists, real
+  SHA-256 matches — *before* anything is copied, and modes are applied from
+  the manifest's `MODE` field, never re-derived from the extracted files'
+  own `stat`. A single bad entry means the install refuses entirely; nothing
+  partial is ever written to `LIB_DIR`.
 
 **Staged, then swapped atomically.** The runtime tree is built in a
 `mktemp -d` staging directory created *under `PREFIX/lib`* — the same
 filesystem as the final destination, so the swap into place is a same-
-filesystem `mv` (a rename) rather than a cross-device copy-then-unlink.
-On an upgrade, the previous tree is renamed aside, the staging directory is
+filesystem `mv` (a rename) rather than a cross-device copy-then-unlink. (If
+`PREFIX` itself sits on a filesystem that silently ignores `chmod`, the
+self-verifying `chmod` above surfaces that as a loud install failure rather
+than a silently-broken install — see §15 for why `package.sh`'s own staging
+directory, unlike this one, was moved *off* the repository tree instead.) On
+an upgrade, the previous tree is renamed aside, the staging directory is
 renamed into place, and only then is the previous tree removed — bounding
 the "no working install" window to two rename syscalls rather than the
 whole copy.
@@ -542,13 +586,33 @@ sole authority for what it's allowed to remove:
   or uninstall refuses outright — this is what stops uninstall from acting
   on a manifest copied from elsewhere or a prefix that merely happens to
   contain a `lib/maops` directory.
-- Every path removal is checked against `"$resolved_prefix"/*` before
-  `rm -f --` runs; a manifest entry outside the resolved prefix aborts the
-  whole run rather than being skipped. There is no `rm -rf` on the prefix
-  itself, or on any directory derived from raw user input — only
-  `rm -f --` on individual manifest-listed files, then `rmdir --` on now-empty
-  directories in reverse-depth order (via `find -depth`, which visits a
-  directory's contents before the directory itself).
+- A read-only `validate_manifest_files` pass runs over every manifest entry
+  **before** any file is removed, scoped to `LIB_DIR` specifically — not
+  merely `PREFIX`, since a shared prefix like `$HOME/.local` commonly hosts
+  other tools' files under sibling directories such as `PREFIX/bin` or
+  `PREFIX/share`, which a `PREFIX`-scoped guard could still reach. Any entry
+  that is empty, outside `LIB_DIR`, contains a `..` traversal component
+  (checked component-by-component, not a substring match), or duplicates an
+  earlier entry fails the *entire* manifest closed — zero files are removed,
+  not just the offending one. Only after validation passes does
+  `remove_files` run its simple existence-check-then-`rm -f --` loop. There
+  is no `rm -rf` on the prefix itself, or on any directory derived from raw
+  user input — only `rm -f --` on individually-validated manifest-listed
+  files, then `rmdir --` on now-empty directories in reverse-depth order
+  (via `find -depth`, which visits a directory's contents before the
+  directory itself).
+
+This is a distinct manifest from `.integrity-manifest` (below) — the two
+have different responsibilities (what to *remove* vs. what to *verify*) and
+are never merged into one file.
+
+**`.integrity-manifest`**: a `MODE<TAB>SHA256<TAB>RELATIVE_PATH` file, in the
+same format as the release archive's internal `MAOPS-MANIFEST.tsv` (§15),
+written into `LIB_DIR` by whichever install mode ran (regenerated from Git's
+index in Git-checkout mode; copied from the verified package manifest in
+archive mode). It exists purely so `maops integrity` (§16) can later verify
+the installed tree independently of whatever installed it. It is not
+consulted by `uninstall.sh`.
 
 **Safety guards, with no override:**
 
@@ -710,37 +774,160 @@ always warnings.
 and a sibling `.sha256` checksum from the current git checkout:
 
 - Copies exactly `scripts/common/release-files.sh`'s `RELEASE_FILE_LIST`
-  (the same list `install.sh` uses, §11) into a staging directory. A
-  directory entry (e.g. `scripts`) is expanded via `git ls-files`, not a raw
-  recursive copy, so a stray untracked temp or editor file left inside it is
-  never silently packaged.
+  (the same list `install.sh` uses, §11) into a staging directory, via the
+  shared `integrity_copy_git_tracked` helper (`scripts/common/integrity.sh`).
+  `git ls-files -s` both expands directory entries (e.g. `scripts`) to their
+  tracked files only — so a stray untracked temp or editor file is never
+  silently packaged — and supplies each file's mode from Git's own index,
+  never from the source filesystem's `stat`/`cp -a`. This is the fix for a
+  real bug: on a filesystem such as WSL/drvfs, `stat` reports `0777` for
+  every tracked file regardless of Git's real index mode, and `cp -a` (the
+  old behavior) propagated that straight into the archive. Each copied
+  file's mode is applied via an explicit, self-verifying `chmod`; every
+  staged directory is separately normalized to `0755` in one pass at the
+  end. **The staging directory itself lives under `mktemp`'s default
+  location, not under `dist/`** — `dist/` is inside the repository and can
+  sit on the same permission-unreliable filesystem as the checkout, whereas
+  `mktemp`'s default location is reliably a plain filesystem that honors
+  `chmod`. Only the final binary archive (a plain file write, no `chmod`
+  needed) is ever written into `dist/`.
+- While staging, also generates **`MAOPS-MANIFEST.tsv`** — one
+  `MODE<TAB>SHA256<TAB>RELATIVE_PATH` line per distributed file (mode from
+  Git's index, SHA-256 of the staged copy, path relative to the archive
+  root), `LC_ALL=C`-sorted, written into the staging directory and so
+  included in the archive. Because it's generated purely from Git-tracked
+  content and is not itself committed to Git, it never lists itself. This is
+  a second, independent integrity layer alongside the external `.sha256`:
+  the external checksum answers "is this the exact archive bytes I was told
+  to trust," the manifest answers "is every individual file inside it
+  exactly what it claims to be" — a compromised archive host that manages to
+  re-sign a tampered external checksum still cannot make internal manifest
+  verification (below) pass.
 - Builds the tarball with `tar --sort=name --mtime="@0" --owner=0 --group=0
   --numeric-owner`, piped through `gzip -n` (rather than relying on `tar -z`
   to suppress gzip's own header timestamp) — repeated builds from an
-  unchanged tree are byte-for-byte identical.
+  unchanged tree are byte-for-byte identical, including when built from a
+  drvfs-simulated `0777` source tree (proven by
+  `tests/release/package.bats`'s `build_drvfs_clone_fixture`-based tests).
 - The archive contains exactly one top-level directory,
   `maops-linux-devops-toolkit-<version>/`.
 - Requires a git checkout (`git rev-parse --is-inside-work-tree`) — packaging
-  is a release-time operation distinct from `install.sh`, which must also
-  work from an already-extracted tarball with no `.git` present.
+  is a release-time operation distinct from `install.sh`, which (§11) also
+  supports installing directly from an already-extracted tarball with no
+  `.git` present, using the shipped `MAOPS-MANIFEST.tsv` instead.
 
 `scripts/release/verify-package.sh` checks, strictly in this order:
 
-1. **Checksum** (`sha256sum -c`) — fails loudly on any modification.
-2. **Archive member safety, before any extraction**: every member name is
-   checked for an absolute path, a literal `..` path segment (checked
-   component-by-component via a `/`-split loop, not a substring match, so a
-   legitimate filename like `v1.2..3` is never a false positive), or a name
-   outside the single expected `maops-linux-devops-toolkit-<version>/`
-   top-level directory. Any violation aborts before `tar -xzf` ever runs.
-3. **Required paths** — only after step 2 passes, the archive is extracted
-   to a `mktemp -d` scratch directory (cleaned up via an `EXIT` trap) and a
-   fixed checklist of paths (`bin/maops`, `scripts/common/bootstrap.sh`,
-   `LICENSE`, `Makefile`, etc.) is confirmed present.
+1. **Snapshot.** The archive and its `.sha256` sidecar are copied into a
+   private `mktemp -d` scratch directory first (cleaned up via an `EXIT`
+   trap); every check below reads only this snapshot, never the caller-
+   supplied archive path again. This closes a TOCTOU window: a concurrent
+   modification to the original archive after verification starts can't
+   affect any check performed here.
+2. **Checksum** (`sha256sum -c`, against the snapshot) — fails loudly on any
+   modification. This remains the sole external authority for "is this the
+   archive I was told to trust."
+3. **Archive member safety, before any extraction.** Every member is
+   inspected via Python's stdlib `tarfile` module — not GNU tar's own
+   verbose-listing text output, which is not a documented, version-stable
+   interface, and is exactly the "extracting tar implementation" this check
+   must not rely on. A member is rejected if its name is absolute, contains
+   a `..` component, sits outside the single expected
+   `maops-linux-devops-toolkit-<version>/` root, belongs to a second
+   top-level root, or is anything other than a regular file or directory —
+   symlinks, hardlinks, character/block devices, and FIFOs are all refused
+   outright, unconditionally (the project ships zero legitimate symlinks
+   today, so there is no "validate the target" carve-out to get wrong). Any
+   violation aborts before `tar -xzf` ever runs anywhere.
+4. **Extraction and required paths.** Only after step 3 passes, the snapshot
+   is extracted to its own `mktemp -d` scratch subdirectory and a fixed
+   checklist of paths (`bin/maops`, `scripts/common/bootstrap.sh`,
+   `MAOPS-MANIFEST.tsv`, `LICENSE`, `Makefile`, etc.) is confirmed present.
+5. **Internal manifest verification.** `MAOPS-MANIFEST.tsv` is parsed
+   (deterministically, via the same `integrity_read_manifest` shared
+   function §16 uses) and every entry's existence, SHA-256 content, and mode
+   are checked against the extracted tree — and the reverse direction too:
+   any extracted file *not* listed in the manifest is also a failure. This
+   is the check that catches content tampering a whole-archive checksum
+   alone cannot distinguish from a legitimate rebuild.
 
-Neither script uses `sudo`, `eval`, or `jq`. `make package`/`make
-verify-package`/`make smoke-install` are separate from `make quality` (they
-touch the filesystem more heavily and, for packaging, require `git`) but are
-run in CI immediately after `make quality` (§6), so a release-readiness
-regression is caught on every push and pull request, not only when a
-maintainer remembers to run them locally.
+Neither script uses `sudo` or `eval`; `verify-package.sh` requires `python3`
+in addition to `tar`/`sha256sum` specifically for step 3 (a release-
+engineering-only dependency — the installed runtime CLI's own dependency
+list in `doctor.sh` is unchanged). `make release-check` (§6) chains
+`quality` → `package` → `verify-package` → `smoke-install` in one command,
+run in CI on every push and pull request, so a release-readiness regression
+is caught immediately rather than only when a maintainer remembers to run it
+locally.
+
+---
+
+## 16. Integrity Verification (`maops integrity`)
+
+`scripts/diagnostics/integrity-check.sh` (routed as `maops integrity
+[--format text|json]`) is a read-only, never-repairing check that answers
+"does what's actually on disk match what it's supposed to be" — for either
+an installed tree or a source-tree checkout. It shares its mode-detection
+trick with `doctor.sh` (§14): `REPO_ROOT` resolves to `LIB_DIR` when run from
+an installed copy, so a simple file-presence check distinguishes the two
+modes without any separate `--prefix` flag.
+
+- **Installed mode** (`LIB_DIR/.integrity-manifest` present): every manifest
+  entry is checked in priority order — existence (`missing` on failure),
+  then SHA-256 content (`modified`), then mode (`unexpected-mode`) — so each
+  file contributes at most one failure. A manifest that fails to parse at
+  all (malformed field count, invalid mode, non-hex/wrong-length checksum,
+  an unsafe relative path, a duplicate path) is reported as
+  `malformed-manifest` rather than crashing.
+- **Source-tree mode** (no installed manifest, but real Git metadata):
+  verifies content via `git diff --quiet` against Git's index (immune to
+  the drvfs mode-confusion problem, since `core.fileMode=false` already
+  makes Git itself ignore permission-bit noise for this comparison) and
+  expected executable modes via `git ls-files -s` — reusing the exact rule
+  `Makefile`'s `check-executable` target already encodes (`*.sh` and
+  `bin/maops` must be `100755`, everything else `100644`) rather than
+  reinventing it. **Working-tree `stat` is never consulted for either
+  check** — this is the whole point: a WSL/drvfs checkout reporting `0777`
+  on every file cannot produce a false pass or false fail here.
+- Neither mode present (no `.integrity-manifest` and no Git metadata) is a
+  hard failure, exit `1` — there is nothing trustworthy to verify against,
+  so the script refuses to guess rather than silently reporting "healthy."
+
+**Exit codes**: `0` every check passed; `1` any check failed, or the
+manifest/Git metadata was unavailable; `2` a CLI usage error (bad `--format`
+value, unknown flag) — the same three-tier convention `doctor.sh` uses.
+
+**JSON output** (`--format json`) is one document, no `jq` dependency, no
+`eval`, assembled manually via `scripts/common/format.sh`'s `json_kv`/escape
+helpers exactly like `doctor.sh`'s JSON renderer:
+
+```json
+{
+  "version": "0.5.0",
+  "execution_mode": "installed",
+  "manifest_path": "/home/user/.local/lib/maops/.integrity-manifest",
+  "overall": "fail",
+  "checked_count": 41,
+  "passed_count": 40,
+  "failed_count": 1,
+  "failures": [
+    {"path": "README.md", "category": "modified", "detail": "content does not match the installed manifest"}
+  ]
+}
+```
+
+(Source-tree mode emits `repository_root` in place of `manifest_path`.)
+
+The shared parsing/validation/mode-normalization logic behind all of this —
+`integrity_git_mode_to_perm`, `integrity_read_manifest`,
+`integrity_validate_manifest_line`, `integrity_is_unsafe_relative_path`,
+`integrity_copy_git_tracked`, `integrity_verify_and_copy_from_manifest`,
+`integrity_sha256_file`, `integrity_chmod_verified` — lives in one place,
+`scripts/common/integrity.sh`, and is deliberately free of any CLI
+output/routing of its own (callers own their own logging and exit codes; on
+failure this library only returns `1` and sets `INTEGRITY_LAST_ERROR` for
+the caller to report). It is sourced explicitly wherever needed (`package.sh`,
+`install.sh`, `uninstall.sh`, `verify-package.sh`,
+`integrity-check.sh`) rather than added to `bootstrap.sh`'s fixed load order,
+the same pattern already used for `release-files.sh` (§2) — most leaf
+scripts never need any of this.

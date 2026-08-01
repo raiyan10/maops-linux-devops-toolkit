@@ -141,29 +141,73 @@ High findings.
 - See [architecture.md §11](architecture.md#11-installation-and-runtime-layout)
   and [architecture.md §15](architecture.md#15-packaging-and-release-verification)
 
+**Release integrity hardening** (`scripts/common/integrity.sh`,
+`scripts/diagnostics/integrity-check.sh`)
+- Fixed: `package.sh`/`install.sh` (source-tree mode) previously trusted
+  `cp -a`-propagated source-filesystem permissions, which are not
+  trustworthy on WSL/drvfs (`stat` reports `0777` for every tracked file
+  regardless of Git's real index mode); every staged/installed mode is now
+  derived exclusively from Git's index, applied via a self-verifying
+  `chmod`
+- `MAOPS-MANIFEST.tsv` — a deterministic, per-file `MODE`/`SHA256`/`PATH`
+  manifest shipped inside the release archive, independent of the external
+  whole-archive `.sha256` checksum
+- `verify-package.sh` now snapshots the archive before any check (closing a
+  TOCTOU window), inspects every member's real type via Python's `tarfile`
+  module before any extraction (rejecting symlinks, hardlinks, devices,
+  FIFOs — not just unsafe paths), and verifies the internal manifest after
+  extraction
+- `install.sh` now supports installing directly from an extracted release
+  archive (no `.git` present), verifying `MAOPS-MANIFEST.tsv` before
+  copying anything
+- `uninstall.sh`'s removal guard is now scoped to `LIB_DIR`, not merely
+  `PREFIX`, with a fully separate, fail-closed manifest-validation pass
+  before any file is removed
+- `maops integrity [--format text|json]` — read-only, never-repairing
+  verification of an installed tree (against `.integrity-manifest`) or a
+  source-tree checkout (against Git's index directly)
+- New `tests/common/core-libraries.bats`, `tests/system/system-tools.bats`,
+  `tests/monitoring/monitoring-tools.bats`,
+  `tests/filesystem/filesystem-tools.bats`,
+  `tests/diagnostics/integrity-check.bats`,
+  `tests/workflows/actions-pinning.bats`, closing the Bats-coverage gap
+  called out below for good
+- `actions/checkout` pinned to a full commit SHA in
+  `.github/workflows/bash-validation.yml`, with a static regression test
+  that fails if any external action reference is ever un-pinned again
+- See [architecture.md §11](architecture.md#11-installation-and-runtime-layout),
+  [§15](architecture.md#15-packaging-and-release-verification), and
+  [§16](architecture.md#16-integrity-verification-maops-integrity)
+
 ## Planned
 
 - **Last-login report** — a historical login-history report (e.g. via
   `last`/`lastlog`) was considered alongside the Day 4 user module but
   deferred; the current-session report in `user-report.sh` does not cover
   historical logins
-- **Per-script `Version:` header stamps are inconsistent** —
-  `scripts/network/*.sh` still say `0.2.0` and `largest-files.sh` has no
-  version stamp at all; a small deferred cleanup, not a functional issue
 - **Architecture diagrams** — visual complement to `docs/architecture.md`
 - **Medium technical article**
 - **Remaining template stubs** — `templates/readme-template.md`,
   `templates/skill-template.md`, and `templates/github-workflow-template.yml`
   are still empty placeholders; only `script-template.sh` is implemented
 - **`require_command` adoption audit** — the guard exists in
-  `scripts/common/helpers.sh` and is used by the filesystem and network
-  modules; extend its use to `system` and `monitoring` scripts for
-  missing-dependency messages on `lscpu`/`free`/`uptime`/`hostname`
+  `scripts/common/helpers.sh` and is used by the filesystem, network, and
+  disk-usage scripts; `system`/`monitoring` scripts (`hostname`, `uname`,
+  `free`, `lscpu`, `uptime`) still call their dependency directly without
+  it. Day 6's new `tests/system/system-tools.bats` and
+  `tests/monitoring/monitoring-tools.bats` document the *actual* current
+  behavior of a missing dependency (a command embedded in a `$(...)`
+  substitution degrades silently under `set -e` and exits `0`; a bare
+  simple command like `free -h` exits `127`) rather than assuming this
+  audit had already happened — adopting `require_command` consistently
+  would make both cases a clean, identical exit `1` with a clear message
 - **Decide on `LOG_DIRECTORY`** in `scripts/common/config.sh` — still defined
   but unused; either implement file-based logging or remove it.
   `DEFAULT_TIMEOUT` is no longer in this category — it is now consumed by
   `ping-check.sh` (per-packet wait) and `port-check.sh` (default connection
   timeout)
-- **Bats coverage for `scripts/common/*.sh` core libraries and the
-  `system`/`monitoring`/`filesystem` leaf scripts** — the Day 3 suite covers
-  the CLI/network additions only
+- **Archive install path is the largest net-new Day 6 surface** — covered by
+  dedicated Bats tests (`tests/install/install.bats`), but has not yet been
+  exercised by a long-running/adversarial fuzz-style test; a good candidate
+  for a future hardening pass if the installer's manifest-verification logic
+  is ever extended further
