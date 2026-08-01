@@ -23,8 +23,11 @@ smoke-install`, and `make integrity` are separate, filesystem-heavier
 release checks — not required for every commit, but chained together as
 `make release-check` and run in CI on every push and pull request. Run
 `make release-check` locally before pushing anything that touches
-`scripts/install/`, `scripts/release/`, `scripts/common/integrity.sh`, or
-`scripts/diagnostics/integrity-check.sh`, to reproduce CI exactly.
+`scripts/install/`, `scripts/release/`, `scripts/common/integrity.sh`,
+`scripts/diagnostics/integrity-check.sh`, `scripts/common/reporting.sh`, or
+`scripts/reports/`, to reproduce CI exactly. `make release-check` does not
+clean `dist/` between runs (fast local iteration); use `make clean
+release-check` when a fully fresh artifact directory is required.
 
 ## Pinned GitHub Actions
 

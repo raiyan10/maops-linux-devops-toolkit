@@ -6,8 +6,8 @@ INSTALL_ARGS ?=
 UNINSTALL_ARGS ?=
 
 .PHONY: help validate lint check-executable quality test run cli-help \
-        config-init doctor integrity install uninstall package verify-package \
-        smoke-install release-check clean
+        config-init doctor integrity report report-json install uninstall \
+        package verify-package smoke-install release-check clean
 
 help:
 	@echo "MAOps Linux DevOps Toolkit"
@@ -23,6 +23,8 @@ help:
 	@echo "  config-init       Run 'maops config init'"
 	@echo "  doctor            Run 'maops doctor'"
 	@echo "  integrity         Run 'maops integrity' against the source tree"
+	@echo "  report            Run 'maops report summary'"
+	@echo "  report-json       Run 'maops report summary --format json' and validate it"
 	@echo "  install           Install to PREFIX (default: \$$HOME/.local); extra flags via INSTALL_ARGS"
 	@echo "  uninstall         Uninstall from PREFIX (default: \$$HOME/.local); extra flags via UNINSTALL_ARGS"
 	@echo "  package           Build dist/*.tar.gz and its .sha256 checksum"
@@ -85,6 +87,17 @@ doctor:
 integrity:
 	@./bin/maops integrity
 
+report:
+	@./bin/maops report summary
+
+report-json:
+	@command -v python3 >/dev/null 2>&1 || { \
+		echo "python3 is not installed."; \
+		exit 1; \
+	}
+	@./bin/maops report summary --format json | python3 -m json.tool >/dev/null
+	@echo "report-json passed."
+
 install:
 	@./scripts/install/install.sh --prefix "$(PREFIX)" $(INSTALL_ARGS)
 
@@ -110,6 +123,10 @@ smoke-install:
 	"$$tmp/bin/maops" doctor --format json | python3 -m json.tool >/dev/null; \
 	"$$tmp/bin/maops" integrity; \
 	"$$tmp/bin/maops" integrity --format json | python3 -m json.tool >/dev/null; \
+	"$$tmp/bin/maops" report summary; \
+	"$$tmp/bin/maops" report summary --format json | python3 -m json.tool >/dev/null; \
+	"$$tmp/bin/maops" report save --output "$$tmp/report.json" --format json; \
+	python3 -m json.tool <"$$tmp/report.json" >/dev/null; \
 	./scripts/install/uninstall.sh --prefix "$$tmp" --yes; \
 	if [[ -e "$$tmp/lib/maops" ]]; then \
 		echo "smoke-install: cleanup left files behind"; \
@@ -117,6 +134,13 @@ smoke-install:
 	fi; \
 	echo "smoke-install passed."
 
+# `release-check` is the authoritative release sequence specifically because
+# `quality` (which includes `check-executable`) runs before `package` and
+# `verify-package` -- executable-bit correctness is enforced before an
+# archive is ever built, not as a separate manual step. It deliberately does
+# NOT depend on `clean`: dist/ is left in place between local runs to keep
+# iteration fast. Run `make clean release-check` when a fully fresh dist/
+# is required (e.g. before verifying reproducibility or cutting a release).
 release-check: quality package verify-package smoke-install
 	@echo "Release check passed."
 

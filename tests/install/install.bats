@@ -76,7 +76,8 @@ teardown() {
 @test "the installed CLI runs doctor successfully" {
     "$INSTALL" --prefix "$PREFIX" >/dev/null
 
-    run "$PREFIX/bin/maops" doctor
+    stub_shadow_path_except
+    run "$REAL_BASH" "$PREFIX/bin/maops" doctor
     [ "$status" -eq 0 ]
     [[ "$output" == *"execution_mode"*"installed"* ]]
 }
@@ -157,6 +158,30 @@ teardown() {
 
     run "$INSTALL" --prefix "$evil"
     [ ! -e "$marker" ]
+}
+
+@test "install.sh refuses to overwrite a foreign symlink at the launcher path" {
+    mkdir -p "$PREFIX/bin"
+    ln -s -- "/bin/true" "$PREFIX/bin/maops"
+
+    run "$INSTALL" --prefix "$PREFIX"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Refusing to overwrite unrelated file"* ]]
+    [ -L "$PREFIX/bin/maops" ]
+    [ "$(readlink "$PREFIX/bin/maops")" = "/bin/true" ]
+    [ ! -e "$PREFIX/lib/maops" ]
+}
+
+@test "install.sh --force does not override the foreign-symlink launcher refusal" {
+    mkdir -p "$PREFIX/bin"
+    ln -s -- "/bin/true" "$PREFIX/bin/maops"
+
+    run "$INSTALL" --prefix "$PREFIX" --force
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Refusing to overwrite unrelated file"* ]]
+    [ -L "$PREFIX/bin/maops" ]
+    [ "$(readlink "$PREFIX/bin/maops")" = "/bin/true" ]
+    [ ! -e "$PREFIX/lib/maops" ]
 }
 
 @test "install.sh and uninstall.sh never invoke sudo" {
@@ -242,6 +267,19 @@ teardown() {
     [ "$(cat "$PREFIX/bin/maops")" = "not maops" ]
 }
 
+@test "uninstall leaves a foreign launcher symlink in place with a warning" {
+    "$INSTALL" --prefix "$PREFIX" >/dev/null
+    rm -- "$PREFIX/bin/maops"
+    ln -s -- "/bin/true" "$PREFIX/bin/maops"
+
+    run "$UNINSTALL" --prefix "$PREFIX" --yes
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Leaving"*"$PREFIX/bin/maops"*"in place"* ]]
+    [ -L "$PREFIX/bin/maops" ]
+    [ "$(readlink "$PREFIX/bin/maops")" = "/bin/true" ]
+    [ ! -f "$PREFIX/lib/maops/.install-manifest" ]
+}
+
 @test "shell metacharacters in an uninstall prefix are never executed" {
     local marker="$BATS_TEST_TMPDIR/marker-uninstall"
     local evil="$BATS_TEST_TMPDIR/evil2-\$(touch $marker)"
@@ -325,7 +363,10 @@ teardown() {
     run "$pkgdir/scripts/install/install.sh" --prefix "$PREFIX"
     [ "$status" -eq 0 ]
 
-    run "$PREFIX/bin/maops" doctor
+    local real_path="$PATH"
+    stub_shadow_path_except
+    run "$REAL_BASH" "$PREFIX/bin/maops" doctor
+    PATH="$real_path"
     [ "$status" -eq 0 ]
 
     diff <(LC_ALL=C sort "$PREFIX/lib/maops/.integrity-manifest") <(LC_ALL=C sort "$pkgdir/MAOPS-MANIFEST.tsv")

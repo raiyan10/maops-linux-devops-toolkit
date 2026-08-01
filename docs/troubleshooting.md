@@ -686,3 +686,41 @@ and a fresh clone (`git config --get core.fileMode` prints nothing at all
 if it's unset, which behaves as `true`). A test or fixture that assumes a
 particular `core.fileMode` value without setting it explicitly will drift
 by environment exactly like this one did.
+
+---
+
+## 19. Interpreting a `maops report` Failure
+
+**Symptom:** `maops report summary` exits `1` with `"overall": "warn"` or
+`"overall": "fail"` (or the equivalent text-mode `overall` line).
+
+**What each status means:**
+
+- **`warn`** — `doctor` and `integrity` both passed, but at least one
+  optional system/resource field (`system.hostname`, `system.kernel`,
+  `resources.load_average`, `resources.memory_total`, etc.) came back
+  `"unavailable"` — typically because the underlying command
+  (`hostname`/`uname`/`getconf`/`uptime`/`free`/`df`) isn't installed in this
+  environment. This is informational only; nothing is actually broken.
+- **`fail`** — either `doctor.overall` or `integrity.overall` is `fail` (see
+  [§15](#15-interpreting-a-maops-doctor-failure-in-a-minimal-environment) and
+  [§17](#17-interpreting-a-maops-integrity-failure) above — `maops report`
+  doesn't add any new failure modes of its own here, it just surfaces
+  theirs), or a *required* section couldn't be collected at all (the
+  toolkit version, timestamp, or execution mode — this generally means
+  something is wrong enough with the environment that even `date` isn't
+  working, which is rare).
+
+**Fix:** `maops report` is diagnostic-only, exactly like `doctor`/`integrity`
+— there is no repair action, on purpose (see [architecture.md
+§17](architecture.md#17-operational-report-maops-report)). Run `maops
+doctor` and `maops integrity` directly to see their full detail; the
+report's own `doctor.overall`/`integrity.overall` fields are deliberately
+just a one-word summary, not a substitute for those commands' own output.
+
+**A saved report (`maops report save --output PATH`) exits non-zero even
+though the file was written:** this is expected — `report save` preserves
+the report's own health-based exit code (`0`/`1`) after a successful save,
+so automation can tell "the file was written but the report says warn/fail"
+apart from "the write itself failed" (which is also exit `1`, but the file
+either won't exist or won't have changed — check for the file first).

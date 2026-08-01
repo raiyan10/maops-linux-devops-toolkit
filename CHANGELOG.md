@@ -4,6 +4,29 @@ All notable changes to the MAOps Linux DevOps Toolkit are documented here.
 
 The project follows Semantic Versioning.
 
+## [0.6.0] - 2026-08-01
+
+### Added
+
+- **Operational report command** (`scripts/reports/operational-report.sh`, `scripts/common/reporting.sh`, `maops report summary|save`): consolidates a safe, read-only operational snapshot — toolkit version, UTC generation timestamp, execution mode, hostname, operating-system description, kernel, architecture, logical CPU count, load average, memory total/available, root filesystem size/used/available/percentage, configuration path/existence/validity, and the `doctor`/`integrity` pass-fail verdicts — into one document, in text or `--format json`. Never collects passwords, shadow data, environment dumps, full process command lines, usernames, group memberships, IP addresses, DNS details, SSH keys, config-file contents, tokens, credentials, or shell history, and never makes a network request. `reporting_collect()` re-invokes `doctor.sh`/`integrity-check.sh` as subprocesses and reads only their exit status — their own check logic and JSON documents are never duplicated or reparsed. Status aggregation: `pass` when doctor/integrity pass and every field is collected; `warn` when only optional system/resource info is unavailable; `fail` when doctor or integrity fails, or a required section (version, timestamp, execution mode, doctor/integrity health) cannot be collected — the report is still emitted in full on the fail path. Exit codes: `0` pass, `1` warn or fail, `2` a CLI usage error.
+- **`--redact`**: replaces `hostname` and `configuration.path` with `<redacted>` in both text and JSON output, without changing report structure or status.
+- **`maops report save --output PATH`**: writes the report to a file via `report_save_atomic` (`scripts/common/reporting.sh`) — refuses an existing directory or symlink target (even with `--force`), refuses to overwrite an existing file without `--force`, requires the parent directory to already exist (no implicit `mkdir -p`), and writes under `umask 077` to a same-directory temporary file (`chmod 0600` set explicitly, independent of the caller's umask) before an atomic `mv` into place, cleaning up the temporary file on any failure. Exit code reflects the report's own health (`0`/`1`) after a successful save; write/output failures return `1`; usage errors return `2`.
+- New `maops` CLI routes: `maops report summary [--format text|json] [--redact]` and `maops report save --output PATH [--format text|json] [--redact] [--force]`, dispatched as a plain `exec` passthrough from `bin/maops` like `doctor`/`integrity`/`config`. Running `maops report` with no subcommand prints usage and exits `2`.
+- New Makefile targets: `report` (runs `maops report summary`) and `report-json` (runs `maops report summary --format json` and validates it via `python3 -m json.tool`). `smoke-install` now also exercises `report summary`, `report summary --format json`, and a `report save --output` round trip.
+- Bats coverage: `tests/reports/operational-report.bats` (53 tests) — deterministic field content via a new `stub_fixed_output` test helper layered on `stub_shadow_path_except`, status aggregation (pass/warn/fail), redaction coverage, atomic-save safety (overwrite/symlink/directory/missing-parent refusals, mode 0600, metacharacter inertness, temp-file cleanup), and no-network/no-mutation guarantees.
+
+### Changed
+
+- `scripts/common/config.sh`: `PROJECT_VERSION` bumped to `0.6.0`.
+- `docs/architecture.md`/`docs/best-practices.md`: documented that `make release-check`'s `quality → package → verify-package → smoke-install` ordering (via `quality`'s `check-executable`) is what makes it the authoritative release sequence, and that it deliberately does not depend on `clean` — use `make clean release-check` for a fully fresh `dist/`.
+- `docs/best-practices.md` §20 / `docs/architecture.md` §15: added an explicit trust-boundary note — the external `.sha256` and internal `MAOPS-MANIFEST.tsv` verify archive-byte and per-file integrity, not who published the archive; publisher-identity signing remains a post-v1.0 roadmap item (`docs/roadmap.md`).
+- `scripts/release/verify-package.sh`: added a code comment documenting that the post-extraction "extra file not in manifest" scan is safe only because `verify_member_safety()` already rejected every non-regular/non-directory archive member before extraction; added the two new report files to `REQUIRED_ARCHIVE_PATHS`.
+
+### Fixed
+
+- `tests/install/install.bats`: the "installed CLI runs doctor successfully" test and the archive-mode install test's doctor check now use `stub_shadow_path_except` (deterministic PATH-shadowing) instead of depending on the host's real `ip`/`lscpu`/`free`/`uptime`/`getent`/`systemctl`, consistent with every other doctor-invoking test in the suite. This also surfaced and fixed a previously-untested gap: `DOCTOR_SHADOW_ROSTER` didn't include `readlink`, which the installed launcher's symlink resolution in `bin/maops` needs.
+- Added previously-missing behavioral tests: `config path`/`config validate`/`config show` with unexpected extra arguments; `install.sh` refusing a foreign launcher symlink at the launcher path (with and without `--force`); `uninstall.sh`'s `remove_launcher` warning branch preserving a foreign launcher symlink instead of deleting it.
+
 ## [0.5.0] - 2026-08-01
 
 ### Added

@@ -65,6 +65,8 @@ Groups and commands:
     config      path | init [--force] | show [--format text|json] | validate [PATH]
     doctor      [--format text|json]
     integrity   [--format text|json]
+    report      summary [--format text|json] [--redact]
+                save --output PATH [--format text|json] [--redact] [--force]
 
 Examples:
     maops system info
@@ -77,6 +79,9 @@ Examples:
     maops config init
     maops doctor
     maops integrity
+    maops report summary
+    maops report summary --format json
+    maops report save --output /tmp/report.json --format json
 EOF
 }
 
@@ -173,10 +178,11 @@ dispatch_service() {
     esac
 }
 
-# config and doctor own their own subcommand/flag parsing (config-manager.sh
-# and doctor.sh respectively), so — unlike the groups above — these are
-# simple passthroughs with no "missing command for group" pre-check and no
-# per-action case statement here.
+# config, doctor, integrity, and report own their own subcommand/flag
+# parsing (config-manager.sh, doctor.sh, integrity-check.sh, and
+# operational-report.sh respectively), so — unlike the groups above — these
+# are simple passthroughs with no "missing command for group" pre-check and
+# no per-action case statement here.
 dispatch_config() {
     exec "$REPO_ROOT/scripts/config/config-manager.sh" "$@"
 }
@@ -187,6 +193,10 @@ dispatch_doctor() {
 
 dispatch_integrity() {
     exec "$REPO_ROOT/scripts/diagnostics/integrity-check.sh" "$@"
+}
+
+dispatch_report() {
+    exec "$REPO_ROOT/scripts/reports/operational-report.sh" "$@"
 }
 
 ###############################################################################
@@ -235,8 +245,13 @@ main() {
             dispatch_integrity "$@"
             ;;
 
+        report)
+            shift
+            dispatch_report "$@"
+            ;;
+
         *)
-            usage_error "Unknown command or group: $1 (expected: help, version, system, monitoring, filesystem, network, user, process, service, config, doctor, integrity)"
+            usage_error "Unknown command or group: $1 (expected: help, version, system, monitoring, filesystem, network, user, process, service, config, doctor, integrity, report)"
             ;;
     esac
 }
