@@ -814,3 +814,13 @@ third time by `maops integrity` (§16 in architecture.md) against an
 format, one parser, three different trust contexts (package build, archive
 verification, post-install verification), rather than three subtly
 different reimplementations that could drift apart.
+
+**What neither layer proves.** The external `.sha256` verifies the archive's
+*bytes*; `MAOPS-MANIFEST.tsv` verifies each distributed file's *content and
+mode* once inside a trusted archive. Neither one proves *who published* the
+archive — a party who can replace both the archive and its `.sha256`
+sidecar can produce a pair that is internally self-consistent by
+construction and passes every check described above. This is a deliberate,
+documented scope boundary, not an oversight: publisher-identity signing
+(e.g. GPG or Sigstore) is explicitly out of scope for the toolkit until a
+post-v1.0 milestone (see `docs/roadmap.md`'s Planned section).

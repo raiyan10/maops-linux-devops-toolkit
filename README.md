@@ -122,6 +122,8 @@ This repository is part of the **MAOps Technologies Engineering Portfolio**.
 │   ├── release
 │   │   ├── package.sh
 │   │   └── verify-package.sh
+│   ├── reports
+│   │   └── operational-report.sh
 │   ├── service
 │   │   └── service-status.sh
 │   ├── system
@@ -158,6 +160,8 @@ This repository is part of the **MAOps Technologies Engineering Portfolio**.
 │   │   └── process-monitor.bats
 │   ├── release
 │   │   └── package.bats
+│   ├── reports
+│   │   └── operational-report.bats
 │   ├── service
 │   │   └── service-status.bats
 │   ├── system
@@ -235,6 +239,10 @@ This repository is part of the **MAOps Technologies Engineering Portfolio**.
 - [x] User-local install/uninstall with a staged, manifest-based runtime tree, supporting both a Git checkout and an extracted release archive as the install source — `install.sh`, `uninstall.sh`
 - [x] Reproducible release tarball, Git-index-derived file modes, an internal per-file integrity manifest, and hardened archive-member/checksum verification — `package.sh`, `verify-package.sh`
 
+### Reporting (`scripts/reports`, `scripts/common/reporting.sh`)
+
+- [x] Operational report — version, execution mode, system/resource facts, config state, and doctor/integrity verdicts, in text or JSON, with `--redact` and secure atomic file saving (read-only, no network calls) — `operational-report.sh`
+
 All utilities above are also reachable through the unified [`maops` CLI](#cli-usage) at `bin/maops`.
 
 ## Planned
@@ -287,6 +295,12 @@ maops doctor --format json
 
 maops integrity
 maops integrity --format json
+
+maops report summary
+maops report summary --format json
+maops report summary --redact
+maops report save --output /tmp/report.json --format json
+maops report save --output /tmp/report.json --format json --force
 ```
 
 Unknown groups or commands print an actionable error and exit with status `2`. Every dispatched command exits with that underlying script's own exit code.
@@ -358,6 +372,22 @@ maops integrity --format json | python3 -m json.tool
 ```
 
 Exits `0` when every file matches, `1` if any file is missing, has modified content, has an unexpected mode, or the manifest itself is malformed — or if neither an installed manifest nor Git metadata is available at all. `maops integrity` never modifies or repairs anything; see [docs/architecture.md §16](docs/architecture.md#16-integrity-verification-maops-integrity) for the full verification model and [docs/troubleshooting.md §17](docs/troubleshooting.md#17-interpreting-a-maops-integrity-failure) for how to interpret a failure.
+
+---
+
+# Report
+
+`maops report summary` consolidates toolkit version, execution mode, system/resource facts (hostname, OS, kernel, architecture, CPU count, load average, memory, root filesystem usage), configuration state, and the `doctor`/`integrity` verdicts into one document — read-only, no network calls, no passwords/environment dumps/process command lines/usernames/IP addresses/config-file contents ever collected:
+
+```bash
+maops report summary
+maops report summary --format json | python3 -m json.tool
+maops report summary --redact
+maops report save --output /tmp/report.json --format json
+maops report save --output /tmp/report.json --format json --force
+```
+
+Exits `0` when doctor/integrity pass and every field is collected, `1` when either fails or only optional system/resource info is unavailable (the report is still emitted in full either way), `2` for a CLI usage error. `--redact` replaces `hostname` and `configuration.path` with `<redacted>`. `report save --output PATH` requires the parent directory to already exist, refuses to overwrite an existing file without `--force`, refuses a symlink target even with `--force`, and writes atomically (a same-directory temp file, mode `0600`, then an atomic rename) so a saved report is never partially written. See [docs/architecture.md §17](docs/architecture.md#17-operational-report-maops-report) for the full field schema and [docs/troubleshooting.md](docs/troubleshooting.md) for how to interpret a failure.
 
 ---
 
@@ -479,8 +509,10 @@ This project follows:
 - [x] Doctor diagnostic command
 - [x] Installation and packaging
 - [x] Release integrity hardening (Git-index mode normalization, internal release manifest, hardened archive verification, `maops integrity`)
+- [x] Operational report command (`maops report summary|save`, text/JSON, redaction, atomic file saving)
 - [ ] Architecture diagrams
 - [ ] Medium technical article
+- [ ] Publisher authenticity / archive signing (see [docs/roadmap.md](docs/roadmap.md))
 
 See [docs/roadmap.md](docs/roadmap.md) for the detailed, module-level roadmap.
 

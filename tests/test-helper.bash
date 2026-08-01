@@ -86,10 +86,10 @@ isolate_config_env() {
 # a "healthy" shadow reports it present) — the absolute-path shebang makes
 # this safe.
 DOCTOR_SHADOW_ROSTER=(
-    bash awk find sort ps getent ip ping timeout df free lscpu uptime
+    bash awk find sort ps getent ip ping timeout df free lscpu uptime getconf
     systemctl service git make shellcheck bats python3
     uname date dirname basename cat mkdir mktemp mv tr grep sed head tail wc stat rm cp chmod
-    hostname whoami sha256sum tar gzip touch
+    hostname whoami sha256sum tar gzip touch readlink
 )
 
 stub_shadow_path_except() {
@@ -112,6 +112,35 @@ stub_shadow_path_except() {
     done
 
     PATH="$SHADOW_DIR"
+}
+
+# stub_fixed_output NAME <<'STUB'
+# ...literal output/exit-code script body...
+# STUB
+#
+# Overrides one command inside an already-built stub_shadow_path_except
+# shadow directory with a fully deterministic fake -- real arguments are
+# ignored (the stub body decides what to do with $@ itself), output is
+# whatever the caller writes. Needed because stub_shadow_path_except's
+# wrappers only fake presence/absence (they exec straight through to the
+# real binary) -- report content assertions (hostname string, memory
+# figures, load average, disk usage) need byte-exact, host-independent
+# output instead. Must be called *after* stub_shadow_path_except, so this
+# overwrites that command's passthrough wrapper rather than being clobbered
+# by it. Uses the same absolute-bash-path shebang discipline as
+# stub_shadow_path_except, for the same anti-recursion reason (PATH is
+# fully replaced by that point).
+stub_fixed_output() {
+    local name="$1"
+    if [[ -z "${SHADOW_DIR:-}" ]]; then
+        echo "stub_fixed_output: call stub_shadow_path_except first" >&2
+        return 1
+    fi
+    {
+        printf '#!%s\n' "$REAL_BASH"
+        cat
+    } >"$SHADOW_DIR/$name"
+    chmod 755 "$SHADOW_DIR/$name"
 }
 
 # --- drvfs (WSL) permission-symptom simulation ------------------------------

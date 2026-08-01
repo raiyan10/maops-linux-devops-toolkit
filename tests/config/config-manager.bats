@@ -56,6 +56,12 @@ setup() {
     [ "$output" = "$MAOPS_CONFIG_FILE" ]
 }
 
+@test "config path rejects a trailing extra argument" {
+    run "$SCRIPT" path bogus
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Unexpected argument: bogus"* ]]
+}
+
 # --- init -----------------------------------------------------------------
 
 @test "config init creates the file and parent directories" {
@@ -174,6 +180,15 @@ EOF
     run "$SCRIPT" validate --help
     [ "$status" -eq 0 ]
     [[ "$output" == *"Usage:"* ]]
+}
+
+@test "config validate rejects a trailing extra argument after PATH" {
+    local cfg="$BATS_TEST_TMPDIR/config"
+    printf 'output_format=text\n' >"$cfg"
+
+    run "$SCRIPT" validate "$cfg" extra
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Unexpected argument: extra"* ]]
 }
 
 # --- validate: value ranges --------------------------------------------
@@ -336,6 +351,12 @@ STUB
 @test "config show rejects an invalid --format value with exit 2" {
     run "$SCRIPT" show --format xml
     [ "$status" -eq 2 ]
+}
+
+@test "config show rejects an unexpected positional argument" {
+    run "$SCRIPT" show bogus
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Unknown option: bogus"* ]]
 }
 
 # --- integration: leaf-script defaults flow through config ------------------

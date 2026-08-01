@@ -179,6 +179,29 @@ High findings.
   [§15](architecture.md#15-packaging-and-release-verification), and
   [§16](architecture.md#16-integrity-verification-maops-integrity)
 
+**Operational report command** (`scripts/reports/operational-report.sh`,
+`scripts/common/reporting.sh`)
+- `maops report summary [--format text|json] [--redact]` and `maops report
+  save --output PATH [...] [--force]` — a safe, read-only operational
+  snapshot (version, execution mode, system/resource facts, config state,
+  and the `doctor`/`integrity` verdicts), never collecting passwords,
+  environment dumps, process command lines, usernames, IP addresses, or
+  config-file contents, and never making a network request
+- Reuses `doctor.sh`/`integrity-check.sh` by exit code only — their check
+  logic and JSON documents are never duplicated or reparsed
+- `--redact` for sharing a report without hostname/config-path details;
+  `report save` writes atomically (same-directory temp file, mode `0600`,
+  atomic rename) with symlink/directory/overwrite refusals
+- New `tests/reports/operational-report.bats` (53 tests) and a new
+  `stub_fixed_output` test helper for deterministic field-content assertions
+- Closed several Day 6 non-blocking findings alongside this work: an
+  undocumented ordering dependency in `verify-package.sh`'s extra-file scan,
+  the `release-check`-vs-`make clean release-check` distinction, deterministic
+  PATH-shadowing for the previously host-dependent installed-doctor test, and
+  new tests for config extra-argument handling and foreign-launcher-symlink
+  refusal/preservation
+- See [architecture.md §17](architecture.md#17-operational-report-maops-report)
+
 ## Planned
 
 - **Last-login report** — a historical login-history report (e.g. via
@@ -211,3 +234,10 @@ High findings.
   exercised by a long-running/adversarial fuzz-style test; a good candidate
   for a future hardening pass if the installer's manifest-verification logic
   is ever extended further
+- **Publisher authenticity / archive signing** — the external `.sha256`
+  checksum and the internal `MAOPS-MANIFEST.tsv` (see
+  [architecture.md §15](architecture.md#15-packaging-and-release-verification)
+  and [best-practices.md §20](best-practices.md#20-two-tier-archive-integrity-external-checksum-vs-internal-manifest))
+  verify archive-byte and per-file integrity today, not *who published* the
+  archive. Publisher-identity signing (e.g. GPG or Sigstore) is deferred to
+  a post-v1.0 milestone

@@ -306,6 +306,8 @@ Dispatch table (`bin/maops`'s `dispatch_<group>()` functions):
 | `service` | `status` | `scripts/service/service-status.sh` |
 | `config` | `path` / `init` / `show` / `validate` | `scripts/config/config-manager.sh` |
 | `doctor` | *(no sub-action)* | `scripts/diagnostics/doctor.sh` |
+| `integrity` | *(no sub-action)* | `scripts/diagnostics/integrity-check.sh` |
+| `report` | `summary` / `save` | `scripts/reports/operational-report.sh` |
 
 `user`, `process`, and `service` each have exactly one command today, but
 they still get their own `dispatch_<group>()` function rather than an inline
@@ -315,15 +317,18 @@ whole mechanism, not per-group special-casing, so giving a single-command
 group its own function keeps every group uniform instead of forking `main()`
 into two different dispatch styles.
 
-`config` and `doctor` are dispatched slightly differently: both get their own
-`dispatch_config`/`dispatch_doctor` function and their own `case` arm in
-`main()`, but neither goes through the generic `"dispatch_$group" "$@"` path
-the other seven groups share, and neither gets the "missing command for
-group" pre-check that arm performs. `doctor` takes no sub-action at all
-(only flags), and `config`'s own subcommand validation is owned entirely by
-`config-manager.sh` — `bin/maops` stays a pure passthrough
+`config`, `doctor`, `integrity`, and `report` are dispatched slightly
+differently: each gets its own `dispatch_*` function and its own `case` arm
+in `main()`, but none goes through the generic `"dispatch_$group" "$@"` path
+the other seven groups share, and none gets the "missing command for group"
+pre-check that arm performs. `doctor`/`integrity` take no sub-action at all
+(only flags); `config`'s and `report`'s own subcommand validation
+(`path`/`init`/`show`/`validate` and `summary`/`save` respectively) is owned
+entirely by their leaf scripts — `bin/maops` stays a pure passthrough
 (`exec "$REPO_ROOT/scripts/config/config-manager.sh" "$@"` /
-`exec "$REPO_ROOT/scripts/diagnostics/doctor.sh" "$@"`) rather than
+`exec "$REPO_ROOT/scripts/diagnostics/doctor.sh" "$@"` /
+`exec "$REPO_ROOT/scripts/diagnostics/integrity-check.sh" "$@"` /
+`exec "$REPO_ROOT/scripts/reports/operational-report.sh" "$@"`) rather than
 duplicating validation logic the leaf script already owns.
 
 **Exit-code split**: `maops` itself only ever returns exit code `2` for its
@@ -724,13 +729,14 @@ substitutions would double-escape the backslashes they themselves introduce),
 `json_object`. No `eval`, no runtime `jq` dependency — JSON is assembled
 entirely through `printf` and parameter expansion.
 
-**Scope for v0.4.0 is deliberately narrow**: only `maops config show
---format json` and `maops doctor --format json` produce JSON. No other leaf
-command gained a `--format` flag in this release. Both commands print
-exactly one JSON document per invocation and skip `log_info`/`show_header`
-entirely in JSON mode, so there is never a stray line before or after the
-document — a hard requirement for piping into `python3 -m json.tool` or a
-downstream `jq`/monitoring consumer.
+**Scope started narrow in v0.4.0** (`maops config show --format json` and
+`maops doctor --format json` only) and has grown since: `maops integrity
+--format json` (v0.5.0) and `maops report summary --format json` / `maops
+report save --format json` (v0.6.0, §17) follow the identical discipline.
+Every one of these commands prints exactly one JSON document per invocation
+and skips `log_info`/`show_header` entirely in JSON mode, so there is never a
+stray line before or after the document — a hard requirement for piping into
+`python3 -m json.tool` or a downstream `jq`/monitoring consumer.
 
 `doctor`'s JSON shape composes an array of check objects by hand (joining
 several `json_kv`-built fragments with `,` and wrapping in `[...]`) rather
@@ -859,10 +865,23 @@ Neither script uses `sudo` or `eval`; `verify-package.sh` requires `python3`
 in addition to `tar`/`sha256sum` specifically for step 3 (a release-
 engineering-only dependency — the installed runtime CLI's own dependency
 list in `doctor.sh` is unchanged). `make release-check` (§6) chains
-`quality` → `package` → `verify-package` → `smoke-install` in one command,
-run in CI on every push and pull request, so a release-readiness regression
-is caught immediately rather than only when a maintainer remembers to run it
+`quality` → `package` → `verify-package` → `smoke-install` in one command —
+it is the authoritative release sequence precisely because `quality`
+(which includes `check-executable`) runs before `package`/`verify-package`,
+enforcing executable-bit correctness before an archive is ever built, not as
+a separate manual step. `release-check` deliberately does not depend on
+`clean`, so `dist/` is left in place between local iterations; run
+`make clean release-check` when a fully fresh `dist/` is required. It is run
+in CI on every push and pull request, so a release-readiness regression is
+caught immediately rather than only when a maintainer remembers to run it
 locally.
+
+**Trust boundary.** Steps 2 and 5 above prove, respectively, "these are the
+exact archive bytes" and "every file inside this archive is exactly what it
+claims to be." Neither proves *who published* the archive — see
+[best-practices.md §20](best-practices.md#20-two-tier-archive-integrity-external-checksum-vs-internal-manifest)
+for the full trust-boundary discussion. Publisher-identity signing remains a
+post-v1.0 roadmap item.
 
 ---
 
@@ -935,3 +954,115 @@ the caller to report). It is sourced explicitly wherever needed (`package.sh`,
 `integrity-check.sh`) rather than added to `bootstrap.sh`'s fixed load order,
 the same pattern already used for `release-files.sh` (§2) — most leaf
 scripts never need any of this.
+
+---
+
+## 17. Operational Report (`maops report`)
+
+`scripts/reports/operational-report.sh` (`maops report summary [--format
+text|json] [--redact]` / `maops report save --output PATH [--format
+text|json] [--redact] [--force]`) consolidates a safe operational snapshot
+into one document. Its collection, aggregation, and atomic-save logic lives
+in `scripts/common/reporting.sh`, sourced explicitly by the leaf script
+alongside `config-file.sh`/`format.sh`, the same pattern `doctor.sh`/
+`integrity-check.sh` already use.
+
+**Fields**, split into required (internal state or a trivially-terminating
+check) and optional (an external command that can legitimately be
+unavailable):
+
+| Section | Fields | Required? |
+|---|---|---|
+| Top-level | `version`, `generated_at_utc`, `execution_mode` | required |
+| `system` | `hostname`, `operating_system`, `kernel`, `architecture`, `logical_cpu_count` | optional |
+| `resources` | `load_average`, `memory_total`, `memory_available`, `root_filesystem_size`/`used`/`available`/`usage_percent` | optional |
+| `configuration` | `path`, `exists`, `valid` | always collectible (see below) |
+| `doctor` / `integrity` | `overall` (`pass`/`fail`) | required |
+
+An optional field that fails to collect (missing command, non-zero exit)
+degrades to the literal string `"unavailable"` (or `0` for
+`logical_cpu_count`, to preserve its JSON number type) rather than aborting
+collection of the rest of the report. `configuration.exists`/`.valid` are
+always collectible — a path is always determinable and `config_validate_file`
+(reused directly from `config-file.sh`, never reimplemented) always
+terminates — so a missing or invalid config file is never itself a
+required-section failure; `doctor.sh` already treats `config_valid` as one
+of its own required checks whenever the file exists, so any config-driven
+failure surfaces through `doctor.overall` instead.
+
+**Reusing doctor/integrity without duplication.** `reporting_collect()` runs
+`"$REPO_ROOT/scripts/diagnostics/doctor.sh"` and
+`"$REPO_ROOT/scripts/diagnostics/integrity-check.sh"` as subprocesses,
+discarding their output entirely, and maps only their exit code (`0`→`pass`,
+`1`→`fail`, anything else → `unavailable` and a required-section failure,
+since the report genuinely cannot vouch for that subsystem's health at that
+point). Their own check logic and JSON documents are never parsed or
+reconstructed. The subprocess call uses the `cmd || exit_code=$?` form
+specifically so a nonzero exit — expected on the fail path — never trips
+`set -e` and aborts the report before it can be rendered.
+
+**Status aggregation** (`reporting_overall`):
+
+```
+fail  if doctor.overall == fail or integrity.overall == fail
+         or a required section is uncollectable
+warn  elif any optional field is unavailable
+pass  otherwise
+```
+
+Exit codes: `0` pass, `1` warn or fail (the report is still emitted in full
+on either path — this is the one command in the CLI where "unhealthy" and
+"nothing to say" are different states, so failure is never silent), `2` a
+CLI usage error.
+
+**Redaction** (`reporting_redact`) overwrites `hostname` and
+`configuration.path` with `<redacted>` after collection, before any
+rendering or saving. No other field can leak a filesystem path by
+construction: `execution_mode` is a fixed enum string, and doctor/integrity
+results are exit-code-derived with their own stdout discarded.
+
+**Atomic save** (`report_save_atomic TARGET CONTENT FORCE`, also in
+`reporting.sh`) refuses an existing symlink target unconditionally — even
+with `--force` — refuses an existing directory, requires the parent
+directory to already exist (deliberately no `mkdir -p`, unlike
+`config_write_atomic`, since `--output` is an arbitrary user-supplied path
+rather than the one well-known XDG config location), and otherwise writes to
+a same-directory temporary file (`.maops-report.XXXXXX`, a prefix distinct
+from `config_write_atomic`'s `.config.XXXXXX`), sets mode `0600` explicitly
+(independent of the caller's `umask 077`), and renames atomically into
+place. Every failure path removes the temporary file before returning.
+
+**JSON output** is one document, assembled by hand via `json_kv` exactly
+like `doctor.sh`/`integrity-check.sh` (§13):
+
+```json
+{
+  "version": "0.6.0",
+  "generated_at_utc": "2026-08-01T12:00:00Z",
+  "execution_mode": "source-tree",
+  "system": {
+    "hostname": "myhost",
+    "operating_system": "Linux",
+    "kernel": "6.8.0-generic",
+    "architecture": "x86_64",
+    "logical_cpu_count": 4
+  },
+  "resources": {
+    "load_average": "0.10, 0.05, 0.01",
+    "memory_total": "15Gi",
+    "memory_available": "10Gi",
+    "root_filesystem_size": "100G",
+    "root_filesystem_used": "40G",
+    "root_filesystem_available": "55G",
+    "root_filesystem_usage_percent": "43%"
+  },
+  "configuration": {
+    "path": "/home/user/.config/maops/config",
+    "exists": true,
+    "valid": true
+  },
+  "doctor": {"overall": "pass"},
+  "integrity": {"overall": "pass"},
+  "overall": "pass"
+}
+```

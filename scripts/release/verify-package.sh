@@ -38,6 +38,8 @@ readonly REQUIRED_ARCHIVE_PATHS=(
     "scripts/config/config-manager.sh"
     "scripts/diagnostics/doctor.sh"
     "scripts/diagnostics/integrity-check.sh"
+    "scripts/common/reporting.sh"
+    "scripts/reports/operational-report.sh"
     "scripts/install/install.sh"
     "scripts/install/uninstall.sh"
     "scripts/release/package.sh"
@@ -274,6 +276,13 @@ verify_integrity_manifest() {
         manifest_path_set[$path]=1
     done
 
+    # This scan only checks each extracted path's *name* against the
+    # manifest, never its type -- that's safe only because
+    # verify_member_safety() already ran, before extraction, and rejected
+    # every archive member that wasn't a plain regular file or directory
+    # (see main(): verify_member_safety precedes extract_snapshot). A
+    # symlink/device/FIFO member could never have reached the filesystem
+    # here to be found by `find -type f` in the first place.
     local extra
     while IFS= read -r extra; do
         if [[ -z "${manifest_path_set[$extra]:-}" ]]; then
