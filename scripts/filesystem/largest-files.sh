@@ -8,6 +8,36 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/../common/bootstrap.sh"
 
+###############################################################################
+# Usage
+###############################################################################
+
+usage() {
+    cat <<EOF
+Usage:
+    $(basename "$0") [TARGET] [LIMIT]
+
+Options:
+    -h, --help       Show this help message
+    -v, --version    Show project version
+
+Arguments:
+    TARGET           Directory to scan (default: .)
+    LIMIT            Number of results to show (default: 10)
+EOF
+}
+
+case "${1:-}" in
+    -h | --help)
+        usage
+        exit 0
+        ;;
+    -v | --version)
+        cli_show_version
+        exit 0
+        ;;
+esac
+
 TARGET="${1:-.}"
 LIMIT="${2:-10}"
 

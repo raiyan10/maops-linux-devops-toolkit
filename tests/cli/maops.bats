@@ -229,3 +229,21 @@ setup() {
     [ "$status" -eq 2 ]
     [[ "$output" == *"integrity"* ]]
 }
+
+# --- Day 8: final CLI-consistency coverage ----------------------------------
+
+@test "maops --help lists every stable v1 group and command" {
+    run "$MAOPS_BIN" --help
+    [ "$status" -eq 0 ]
+    for word in system monitoring filesystem network user process service \
+        config doctor integrity report; do
+        [[ "$output" == *"$word"* ]]
+    done
+}
+
+@test "maops report --redact forwards through the dispatcher to operational-report.sh" {
+    run "$MAOPS_BIN" report summary --redact --format json
+    [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
+    printf '%s' "$output" | python3 -c 'import json,sys; json.load(sys.stdin)'
+    [[ "$output" == *'"hostname":"<redacted>"'* ]]
+}

@@ -32,6 +32,14 @@
 [[ -n "${MAOPS_REPORTING_LOADED:-}" ]] && return
 readonly MAOPS_REPORTING_LOADED=1
 
+# Overridable only for tests -- points a resource collector's stable-Linux
+# fallback source at a fixture file instead of the real /proc, since the
+# real /proc/loadavg and /proc/meminfo exist on every actual Linux host
+# (including CI/WSL2) regardless of PATH-based command stubbing. Mirrors
+# config-file.sh's MAOPS_CONFIG_FILE override convention.
+: "${MAOPS_PROC_LOADAVG:=/proc/loadavg}"
+: "${MAOPS_PROC_MEMINFO:=/proc/meminfo}"
+
 REPORT_VERSION=""
 REPORT_GENERATED_AT=""
 REPORT_EXEC_MODE=""
@@ -184,30 +192,115 @@ _reporting_collect_cpu_count() {
     REPORT_OPTIONAL_MISSING=1
 }
 
+# Shape a parsed field must match before it is trusted, so an unexpected or
+# malformed column layout (a non-GNU/BusyBox command, an unfamiliar locale,
+# a truncated line) degrades the field to "unavailable" instead of silently
+# reporting garbage as if it were real data. These are deliberately loose
+# (they validate *shape*, not exact command-specific formatting), so any
+# genuinely GNU-coreutils/procps-shaped output continues to match exactly as
+# it always has.
+readonly _REPORT_LOAD_AVERAGE_SHAPE='^[0-9]+\.[0-9]+, [0-9]+\.[0-9]+, [0-9]+\.[0-9]+$'
+# df -hP's unit convention: an optional single-letter K/M/G/T/P suffix (no
+# leading "i"), or bare digits for very small values.
+readonly _REPORT_HUMAN_SIZE_SHAPE='^[0-9]+(\.[0-9]+)?[KMGTPE]?$'
+# free -h's unit convention differs from df's: always a unit, either a
+# binary-prefix letter followed by "i" (Ki/Mi/Gi/Ti/Pi) or a bare "B" for
+# byte values -- never a bare number. Requiring the unit here is what lets
+# this reject a BusyBox/non-procps `free` whose misaligned columns would
+# otherwise hand back a plausible-looking but meaningless raw byte count.
+readonly _REPORT_MEM_SIZE_SHAPE='^[0-9]+(\.[0-9]+)?((Ki|Mi|Gi|Ti|Pi)|B)$'
+readonly _REPORT_PERCENT_SHAPE='^[0-9]+%$'
+
+# _reporting_load_average_from_proc
+# Stable-Linux fallback source for load average, used only when `uptime`'s
+# output is missing or fails the shape check above. /proc/loadavg's format
+# ("0.10 0.05 0.01 1/523 12345") is a kernel ABI, not a locale- or
+# implementation-dependent text rendering, so it is preferred over
+# `uptime`'s free-text "load average:" parsing wherever it's readable.
+_reporting_load_average_from_proc() {
+    local raw f1 f2 f3
+    [[ -r "$MAOPS_PROC_LOADAVG" ]] || return 1
+    raw="$(cat -- "$MAOPS_PROC_LOADAVG" 2>/dev/null)" || return 1
+    read -r f1 f2 f3 _ <<<"$raw"
+    [[ "$f1" =~ ^[0-9]+\.[0-9]+$ && "$f2" =~ ^[0-9]+\.[0-9]+$ && "$f3" =~ ^[0-9]+\.[0-9]+$ ]] || return 1
+    printf '%s, %s, %s' "$f1" "$f2" "$f3"
+}
+
 _reporting_collect_load_average() {
-    local raw parsed
+    local raw parsed proc_value
+
     if raw="$(uptime 2>/dev/null)" && [[ -n "$raw" ]]; then
         parsed="$(printf '%s' "$raw" | sed -E 's/^.*[Ll]oad average:?[[:space:]]*//')"
-        if [[ -n "$parsed" && "$parsed" != "$raw" ]]; then
+        if [[ -n "$parsed" && "$parsed" != "$raw" && "$parsed" =~ $_REPORT_LOAD_AVERAGE_SHAPE ]]; then
             REPORT_LOAD_AVERAGE="$parsed"
             return 0
         fi
     fi
+
+    if proc_value="$(_reporting_load_average_from_proc)" && [[ "$proc_value" =~ $_REPORT_LOAD_AVERAGE_SHAPE ]]; then
+        REPORT_LOAD_AVERAGE="$proc_value"
+        return 0
+    fi
+
     REPORT_LOAD_AVERAGE="unavailable"
     REPORT_OPTIONAL_MISSING=1
 }
 
+# _reporting_kb_to_human KB
+# Binary-unit, one-decimal-place approximation used only on the
+# /proc/meminfo fallback path. Deliberately not byte-identical to
+# `free -h`'s own rounding table -- that table is never asserted char-for-
+# char here, since this path is only reached when `free -h` itself is
+# unavailable or fails the shape check.
+_reporting_kb_to_human() {
+    local kb="$1"
+    awk -v kb="$kb" 'BEGIN {
+        split("K M G T P", units, " ")
+        v = kb; i = 1
+        while (v >= 1024 && i < 5) { v /= 1024; i++ }
+        printf "%.1f%s\n", v, units[i]
+    }'
+}
+
+# _reporting_memory_from_proc
+# Stable-Linux fallback source for total/available memory, used only when
+# `free -h`'s output is missing or fails the shape check. MemAvailable is a
+# kernel-computed field (not present in very old kernels, but universally
+# present on any kernel this toolkit targets) intended to be the same
+# "available for new applications" figure `free`'s available column shows.
+_reporting_memory_from_proc() {
+    local total_kb avail_kb
+    [[ -r "$MAOPS_PROC_MEMINFO" ]] || return 1
+    total_kb="$(awk '/^MemTotal:/{print $2}' "$MAOPS_PROC_MEMINFO" 2>/dev/null)"
+    avail_kb="$(awk '/^MemAvailable:/{print $2}' "$MAOPS_PROC_MEMINFO" 2>/dev/null)"
+    [[ "$total_kb" =~ ^[0-9]+$ && "$avail_kb" =~ ^[0-9]+$ ]] || return 1
+    printf '%s %s' "$(_reporting_kb_to_human "$total_kb")" "$(_reporting_kb_to_human "$avail_kb")"
+}
+
 # free -h's standard (procps) column layout: Mem: total used free shared
-# buff/cache available -- columns 2 and 7.
+# buff/cache available -- columns 2 and 7. A BusyBox/non-procps `free`
+# (different column count, no "available" column) will not produce two
+# shape-matching fields here, so this falls through to the proc fallback
+# rather than trusting a misaligned column as if it were real data.
 _reporting_collect_memory() {
-    local line
+    local line total avail proc_line
+
     if line="$(free -h 2>/dev/null | awk '/^Mem:/{print $2, $7}')" && [[ -n "$line" ]]; then
-        REPORT_MEM_TOTAL="$(awk '{print $1}' <<<"$line")"
-        REPORT_MEM_AVAILABLE="$(awk '{print $2}' <<<"$line")"
-        if [[ -n "$REPORT_MEM_TOTAL" && -n "$REPORT_MEM_AVAILABLE" ]]; then
+        total="$(awk '{print $1}' <<<"$line")"
+        avail="$(awk '{print $2}' <<<"$line")"
+        if [[ "$total" =~ $_REPORT_MEM_SIZE_SHAPE && "$avail" =~ $_REPORT_MEM_SIZE_SHAPE ]]; then
+            REPORT_MEM_TOTAL="$total"
+            REPORT_MEM_AVAILABLE="$avail"
             return 0
         fi
     fi
+
+    if proc_line="$(_reporting_memory_from_proc)"; then
+        REPORT_MEM_TOTAL="$(awk '{print $1}' <<<"$proc_line")"
+        REPORT_MEM_AVAILABLE="$(awk '{print $2}' <<<"$proc_line")"
+        return 0
+    fi
+
     REPORT_MEM_TOTAL="unavailable"
     REPORT_MEM_AVAILABLE="unavailable"
     REPORT_OPTIONAL_MISSING=1
@@ -215,15 +308,23 @@ _reporting_collect_memory() {
 
 # `-P` forces df's POSIX single-line-per-filesystem output, avoiding the
 # long-device-name line-wrap that plain `df -h` can produce; `-h` still
-# applies human-readable units on top of that fixed layout.
+# applies human-readable units on top of that fixed layout. There is no
+# /proc equivalent for filesystem usage, so a shape-check failure here
+# degrades straight to "unavailable" rather than falling back to a second
+# source.
 _reporting_collect_rootfs() {
-    local line
+    local line size used avail pct
     if line="$(df -hP / 2>/dev/null | awk 'NR==2{print $2, $3, $4, $5}')" && [[ -n "$line" ]]; then
-        REPORT_ROOTFS_SIZE="$(awk '{print $1}' <<<"$line")"
-        REPORT_ROOTFS_USED="$(awk '{print $2}' <<<"$line")"
-        REPORT_ROOTFS_AVAILABLE="$(awk '{print $3}' <<<"$line")"
-        REPORT_ROOTFS_PERCENT="$(awk '{print $4}' <<<"$line")"
-        if [[ -n "$REPORT_ROOTFS_SIZE" ]]; then
+        size="$(awk '{print $1}' <<<"$line")"
+        used="$(awk '{print $2}' <<<"$line")"
+        avail="$(awk '{print $3}' <<<"$line")"
+        pct="$(awk '{print $4}' <<<"$line")"
+        if [[ "$size" =~ $_REPORT_HUMAN_SIZE_SHAPE && "$used" =~ $_REPORT_HUMAN_SIZE_SHAPE \
+            && "$avail" =~ $_REPORT_HUMAN_SIZE_SHAPE && "$pct" =~ $_REPORT_PERCENT_SHAPE ]]; then
+            REPORT_ROOTFS_SIZE="$size"
+            REPORT_ROOTFS_USED="$used"
+            REPORT_ROOTFS_AVAILABLE="$avail"
+            REPORT_ROOTFS_PERCENT="$pct"
             return 0
         fi
     fi

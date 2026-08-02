@@ -724,3 +724,56 @@ the report's own health-based exit code (`0`/`1`) after a successful save,
 so automation can tell "the file was written but the report says warn/fail"
 apart from "the write itself failed" (which is also exit `1`, but the file
 either won't exist or won't have changed — check for the file first).
+
+---
+
+## 20. A Stray `.maops-report.*` File Is Left in the Destination Directory
+
+**Symptom:** A file named `.maops-report.XXXXXX` (six random alphanumeric
+characters) is found sitting in a directory where you've run `maops report
+save --output ...`, even though no `report` command is currently running and
+the actual output file at `--output` looks correct (or is missing entirely).
+
+**Cause:** `report_save_atomic()` (`scripts/common/reporting.sh`) writes the
+report to a temporary file in the *same directory* as the final `--output`
+path, then renames it into place with `mv -f` — this is what makes the save
+atomic (see [architecture.md
+§17](architecture.md#17-operational-report-maops-report)). If the process is
+killed by an uncatchable fatal signal — `SIGKILL` (`kill -9`), `SIGXFSZ` (file
+size limit exceeded), or any other signal Bash cannot trap — between the
+temp file being created and the final `mv`, the temp file is left behind.
+This is a deliberate, accepted residual risk, not a bug: Bash's `trap`
+mechanism cannot intercept `SIGKILL` under any circumstances, on any Unix
+system, so no amount of cleanup-on-exit logic in the script itself can
+close this window.
+
+**What is and isn't at risk:**
+
+- **The real destination (`--output`) is never partially replaced.** The
+  final `mv -f -- "$tmp" "$target"` is a single atomic rename on the same
+  filesystem — it either completes fully or the destination is untouched.
+  A fatal signal during the write can only ever leave the *temporary* file
+  behind; it cannot corrupt or truncate the destination file.
+- **The leftover file is mode `0600`.** `report_save_atomic()` sets this
+  explicitly on the temp file (independent of the caller's umask) before
+  writing any content to it, so a stray `.maops-report.*` file carries the
+  same "owner-read-write-only" guarantee as a normal saved report — it is
+  never left world- or group-readable.
+- **It is safe to inspect and delete manually.** The file contains only the
+  same report content `report save` would otherwise have written (system
+  facts, doctor/integrity status, timestamps) — no different in sensitivity
+  from a normal saved report, and definitely not a partially-written binary
+  or a lock file something else depends on.
+
+**Fix:** There isn't one, by design. **MAOps will never automatically scan
+for and delete files matching `.maops-report.*`** — a cleanup routine that
+globs and removes files by name pattern in a directory the user chose is a
+far larger blast radius than the problem it would solve (see
+[best-practices.md §21](best-practices.md#21-secure-temp-file-handling-race-free-mode-0600-atomic-rename)
+for the general "no automatic deletion of unknown temp files" rule this
+follows). If you find one of these files, delete it yourself once you've
+confirmed the real `--output` file is in the state you expect:
+
+```bash
+rm -- /path/to/destination/.maops-report.XXXXXX
+```

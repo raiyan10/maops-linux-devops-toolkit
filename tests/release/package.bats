@@ -72,6 +72,24 @@ teardown() {
     [[ "$listing" == *"$PKG_NAME/CHANGELOG.md"* ]]
 }
 
+# --- Day 8: v1.0.0 release-content additions --------------------------------
+
+@test "Day 8 user documentation and examples are present inside the archive" {
+    "$PACKAGE" >/dev/null
+
+    local listing
+    listing="$(tar -tzf "$ARCHIVE")"
+    [[ "$listing" == *"$PKG_NAME/SECURITY.md"* ]]
+    [[ "$listing" == *"$PKG_NAME/SUPPORT.md"* ]]
+    [[ "$listing" == *"$PKG_NAME/docs/quickstart.md"* ]]
+    [[ "$listing" == *"$PKG_NAME/docs/install-from-release.md"* ]]
+    [[ "$listing" == *"$PKG_NAME/docs/compatibility.md"* ]]
+    [[ "$listing" == *"$PKG_NAME/docs/demo-workflow.md"* ]]
+    [[ "$listing" == *"$PKG_NAME/examples/README.md"* ]]
+    [[ "$listing" == *"$PKG_NAME/examples/config/maops.conf"* ]]
+    [[ "$listing" == *"$PKG_NAME/examples/automation/health-report.sh"* ]]
+}
+
 @test "excluded directories are absent from the archive" {
     "$PACKAGE" >/dev/null
 
@@ -82,7 +100,17 @@ teardown() {
     [[ "$listing" != *"/.claude/"* ]]
     [[ "$listing" != *"/dist/"* ]]
     [[ "$listing" != *"tests/"* ]]
-    [[ "$listing" != *"docs/"* ]]
+    # Day 8 ships four specific docs/ files (asserted by name above) plus
+    # the whole examples/ tree, so the exclusion check for docs/ must now be
+    # precise rather than blanket: engineering-review write-ups and
+    # screenshots stay dev-only, never distributed.
+    [[ "$listing" != *"docs/engineering-reviews/"* ]]
+    [[ "$listing" != *"docs/images/"* ]]
+    [[ "$listing" != *"$PKG_NAME/docs/architecture.md"* ]]
+    [[ "$listing" != *"$PKG_NAME/docs/best-practices.md"* ]]
+    [[ "$listing" != *"$PKG_NAME/docs/troubleshooting.md"* ]]
+    [[ "$listing" != *"$PKG_NAME/docs/roadmap.md"* ]]
+    [[ "$listing" != *"$PKG_NAME/docs/portfolio-case-study.md"* ]]
 }
 
 @test "no user configuration or secrets are packaged" {

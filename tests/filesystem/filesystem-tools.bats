@@ -27,6 +27,18 @@ setup() {
     [[ "$output" == *"Required command not found: df"* ]]
 }
 
+@test "disk-usage.sh --help exits 0" {
+    run "$DISK_USAGE" --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Usage:"* ]]
+}
+
+@test "disk-usage.sh --version exits 0 and shows the current project version" {
+    run "$DISK_USAGE" --version
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$PROJECT_VERSION"* ]]
+}
+
 # --- largest-files.sh --------------------------------------------------
 
 @test "largest-files.sh default TARGET/LIMIT works from a populated directory" {
@@ -102,6 +114,18 @@ setup() {
     [ ! -e "$marker" ]
 }
 
+@test "largest-files.sh --help exits 0" {
+    run "$LARGEST_FILES" --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Usage:"* ]]
+}
+
+@test "largest-files.sh --version exits 0 and shows the current project version" {
+    run "$LARGEST_FILES" --version
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$PROJECT_VERSION"* ]]
+}
+
 # --- cleanup-temp.sh --------------------------------------------------
 
 @test "cleanup-temp.sh reports no results and stays a dry run on an empty directory" {
@@ -175,4 +199,16 @@ setup() {
 
     run "$CLEANUP_TEMP" "$evil"
     [ ! -e "$marker" ]
+}
+
+@test "cleanup-temp.sh --help exits 0" {
+    run "$CLEANUP_TEMP" --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Usage:"* ]]
+}
+
+@test "cleanup-temp.sh --version exits 0 and shows the current project version" {
+    run "$CLEANUP_TEMP" --version
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$PROJECT_VERSION"* ]]
 }

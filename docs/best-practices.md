@@ -824,3 +824,43 @@ construction and passes every check described above. This is a deliberate,
 documented scope boundary, not an oversight: publisher-identity signing
 (e.g. GPG or Sigstore) is explicitly out of scope for the toolkit until a
 post-v1.0 milestone (see `docs/roadmap.md`'s Planned section).
+
+## 21. Secure Temp-File Handling: Race-Free, Mode-0600, Atomic Rename
+
+Any code path that writes a file a caller will later read as trusted output
+— `config_write_atomic()` in `scripts/common/config-file.sh` and
+`report_save_atomic()` in `scripts/common/reporting.sh` are the two
+instances in this codebase — follows the same three-part pattern rather
+than writing the destination path directly:
+
+1. **Create the temp file in the *same directory* as the final target**,
+   via `mktemp -- "$dir/.PREFIX.XXXXXX"`. Same-directory placement is what
+   makes the final step a same-filesystem atomic rename instead of a
+   cross-device copy-then-unlink, which is not atomic and can leave a
+   half-written destination if interrupted. The two call sites use
+   distinct prefixes (`.config.XXXXXX` vs. `.maops-report.XXXXXX`) so they
+   can never collide even if one target path happens to sit inside the
+   other's directory.
+2. **`chmod 0600` the temp file explicitly**, before writing any content to
+   it, rather than relying solely on the caller's `umask`. Setting the mode
+   explicitly means the guarantee holds even if some future call site
+   forgets to set `umask 077` first — the permission is a property of the
+   function, not of every caller's discipline.
+3. **`mv -f` the temp file onto the final target** as the last step. This
+   single rename either fully succeeds or fully fails; a reader can never
+   observe a partially-written destination file.
+
+Every failure path (mktemp failure, chmod failure, write failure, mv
+failure) explicitly `rm -f`s the temp file before returning, so a normal
+failure never leaves debris behind. The one case this pattern cannot cover
+is a fatal, untrappable signal — `SIGKILL`, `SIGXFSZ` — arriving between
+step 1 and step 3: no `trap` can run in that case, on any Unix system, so a
+`.maops-report.*`/`.config.*` temp file can be left on disk. This is an
+accepted residual risk, not a bug: the destination file is still never
+partially replaced (the rename never started), the leftover file is still
+mode `0600`, and it is safe to delete by hand. See
+[troubleshooting.md §20](troubleshooting.md#20-a-stray-maops-report-file-is-left-in-the-destination-directory)
+for the user-facing version of this note. The toolkit deliberately never
+scans for and auto-deletes files matching either temp-file pattern — doing
+so would mean globbing and removing files by name in a directory the user
+chose, which is a larger blast radius than the problem it would solve.

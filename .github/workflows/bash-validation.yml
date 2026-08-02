@@ -26,12 +26,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes shellcheck bats python3
 
-      - name: Run release check (quality, package, verify-package, smoke-install)
+      - name: Run final check (release-check, docs-check, examples-check, report-json, integrity)
         env:
           HOME: ${{ runner.temp }}/maops-ci-home
         run: |
           mkdir -p "$HOME"
-          make release-check
+          make final-check
 
       - name: Validation completed
         run: echo "All Bash quality checks passed."

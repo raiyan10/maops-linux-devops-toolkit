@@ -28,4 +28,20 @@ readonly RELEASE_FILE_LIST=(
     "LICENSE"
     "Makefile"
     ".gitattributes"
+    "SECURITY.md"
+    "SUPPORT.md"
+    "docs/quickstart.md"
+    "docs/install-from-release.md"
+    "docs/compatibility.md"
+    "docs/demo-workflow.md"
+    "examples"
 )
+
+# Paths deliberately NOT included above, so `docs/engineering-reviews/` and
+# `docs/images/` (dev-only engineering-review material and screenshots) are
+# never distributed: the rest of docs/ (architecture.md, best-practices.md,
+# troubleshooting.md, roadmap.md, portfolio-case-study.md) and tests/,
+# dist/, .git/, .github/, .claude/ are simply never listed above. Because
+# only paths explicitly listed here are ever staged (via
+# integrity_copy_git_tracked's `git ls-files -s -z -- "$@"`), omission alone
+# is a complete exclusion mechanism -- no separate exclude-list is needed.

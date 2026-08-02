@@ -165,6 +165,23 @@ STUB
     [ "$status" -eq 2 ]
 }
 
+@test "report summary --format JSON (uppercase) is rejected predictably, not silently normalized" {
+    run "$SCRIPT" summary --format JSON
+    [ "$status" -eq 2 ]
+}
+
+@test "operational-report.sh -v exits 0 and shows the current project version" {
+    run "$SCRIPT" -v
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$PROJECT_VERSION"* ]]
+}
+
+@test "operational-report.sh version (bare subcommand) exits 0 and shows the current project version" {
+    run "$SCRIPT" version
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$PROJECT_VERSION"* ]]
+}
+
 @test "report summary --format=json (combined-flag syntax) works" {
     run "$SCRIPT" summary --format=json
     assert_valid_json "$output"
@@ -260,9 +277,105 @@ STUB
 }
 
 @test "an unavailable optional command degrades its field rather than crashing" {
+    # uptime is shadowed away (genuinely missing, not just PATH-stubbed), and
+    # MAOPS_PROC_LOADAVG is redirected to a nonexistent path so the
+    # /proc/loadavg fallback introduced for Day 8 also genuinely fails --
+    # otherwise the real host's actual /proc/loadavg would be read and the
+    # field would populate instead of degrading, since the fallback exists
+    # precisely to avoid "unavailable" when only one of the two sources is
+    # missing.
     stub_shadow_path_except uptime
+    export MAOPS_PROC_LOADAVG="$BATS_TEST_TMPDIR/no-such-loadavg"
     run "$REAL_BASH" "$SCRIPT" summary --format json
     [ "$(json_field "$output" 'doc["resources"]["load_average"]')" = "unavailable" ]
+}
+
+@test "the /proc/loadavg fallback is used when uptime is unavailable but /proc/loadavg is readable" {
+    stub_shadow_path_except uptime
+    export MAOPS_PROC_LOADAVG="$BATS_TEST_TMPDIR/loadavg"
+    printf '0.52 0.58 0.59 1/523 12345\n' >"$MAOPS_PROC_LOADAVG"
+
+    run "$REAL_BASH" "$SCRIPT" summary --format json
+    [ "$(json_field "$output" 'doc["resources"]["load_average"]')" = "0.52, 0.58, 0.59" ]
+}
+
+@test "a malformed /proc/loadavg fixture degrades to unavailable rather than emitting garbage" {
+    stub_shadow_path_except uptime
+    export MAOPS_PROC_LOADAVG="$BATS_TEST_TMPDIR/loadavg"
+    printf 'not-a-load-average\n' >"$MAOPS_PROC_LOADAVG"
+
+    run "$REAL_BASH" "$SCRIPT" summary --format json
+    [ "$(json_field "$output" 'doc["resources"]["load_average"]')" = "unavailable" ]
+}
+
+@test "a BusyBox-shaped free with no available column falls back to /proc/meminfo" {
+    stub_shadow_path_except
+    stub_fixed_output hostname <<'STUB'
+printf 'report-test-host\n'
+STUB
+    stub_fixed_output uname <<'STUB'
+case "$1" in
+    -s) printf 'Linux\n' ;;
+    -r) printf '6.18.0-test\n' ;;
+    -m) printf 'x86_64\n' ;;
+    *) printf 'Linux\n' ;;
+esac
+STUB
+    stub_fixed_output getconf <<'STUB'
+printf '4\n'
+STUB
+    stub_fixed_output uptime <<'STUB'
+printf ' 12:00:00 up 1 day,  load average: 0.10, 0.05, 0.01\n'
+STUB
+    # BusyBox `free` (no -h flag support assumed, no "available" column):
+    # Mem: total used free shared buffers cached -- column 7 is populated
+    # (it's "cached", not empty), but it's a bare byte count with no unit
+    # suffix, so it fails _REPORT_MEM_SIZE_SHAPE's mandatory Ki/Mi/Gi/Ti/Pi/B
+    # requirement and correctly falls through to the /proc/meminfo fallback
+    # below rather than being misread as a valid "available" figure.
+    stub_fixed_output free <<'STUB'
+printf '             total       used       free     shared    buffers     cached\n'
+printf 'Mem:       16336864    4211200   12125664          0     102400    2048000\n'
+STUB
+    stub_fixed_output df <<'STUB'
+printf 'Filesystem      Size  Used Avail Use%% Mounted on\n'
+printf '/dev/sda1       100G   40G   55G  43%% /\n'
+STUB
+
+    export MAOPS_PROC_MEMINFO="$BATS_TEST_TMPDIR/meminfo"
+    printf 'MemTotal:       16336864 kB\nMemAvailable:   14173664 kB\n' >"$MAOPS_PROC_MEMINFO"
+
+    run "$REAL_BASH" "$SCRIPT" summary --format json
+    [ "$(json_field "$output" 'doc["resources"]["memory_total"]')" = "15.6G" ]
+    [ "$(json_field "$output" 'doc["resources"]["memory_available"]')" = "13.5G" ]
+}
+
+@test "malformed free output with no /proc/meminfo fixture degrades memory fields to unavailable" {
+    stub_shadow_path_except
+    stub_deterministic_system_facts
+    stub_fixed_output free <<'STUB'
+printf 'garbage output, not a memory table\n'
+STUB
+    export MAOPS_PROC_MEMINFO="$BATS_TEST_TMPDIR/no-such-meminfo"
+
+    run "$REAL_BASH" "$SCRIPT" summary --format json
+    [ "$(json_field "$output" 'doc["resources"]["memory_total"]')" = "unavailable" ]
+    [ "$(json_field "$output" 'doc["resources"]["memory_available"]')" = "unavailable" ]
+}
+
+@test "a malformed df Use% column degrades rootfs fields to unavailable instead of a wrong value" {
+    stub_shadow_path_except
+    stub_deterministic_system_facts
+    stub_fixed_output df <<'STUB'
+printf 'Filesystem      Size  Used Avail Use%% Mounted on\n'
+printf '/dev/sda1       100G   40G   55G  43 /\n'
+STUB
+
+    run "$REAL_BASH" "$SCRIPT" summary --format json
+    [ "$(json_field "$output" 'doc["resources"]["root_filesystem_size"]')" = "unavailable" ]
+    [ "$(json_field "$output" 'doc["resources"]["root_filesystem_used"]')" = "unavailable" ]
+    [ "$(json_field "$output" 'doc["resources"]["root_filesystem_available"]')" = "unavailable" ]
+    [ "$(json_field "$output" 'doc["resources"]["root_filesystem_usage_percent"]')" = "unavailable" ]
 }
 
 @test "JSON boolean configuration fields are real JSON booleans" {
@@ -555,6 +668,26 @@ STUB
     run "$SCRIPT" save --output "$target" --format json
     [ ! -e "$BATS_TEST_TMPDIR/pwned-marker" ]
     [ -f "$target" ]
+}
+
+@test "report save output path containing a literal embedded newline stays inert" {
+    # A newline embedded in --output's value is a legal (if unusual) filename
+    # byte on Linux. This asserts it stays inert (no path-splitting, no
+    # unintended second file, no command injection) rather than asserting it
+    # is rejected -- the value flows through dirname/mktemp/mv entirely via
+    # quoted expansion, so it should simply become part of a literal
+    # filename.
+    local weird_name=$'weird\nname.json'
+    local target="$BATS_TEST_TMPDIR/$weird_name"
+
+    run "$SCRIPT" save --output "$target" --format json
+    [ -f "$target" ]
+    # A NUL-delimited count, not a newline-delimited one: the target
+    # filename itself contains a newline, so `find ... | wc -l` would
+    # over-count a single real file as two lines.
+    local file_count
+    file_count="$(find "$BATS_TEST_TMPDIR" -mindepth 1 -maxdepth 1 -type f -print0 | grep -zc . || true)"
+    [ "$file_count" -eq 1 ]
 }
 
 @test "report save without --output is a usage error (exit 2)" {
