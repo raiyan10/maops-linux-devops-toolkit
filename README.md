@@ -7,7 +7,14 @@
 [![Bash Validation](https://github.com/raiyan10/maops-linux-devops-toolkit/actions/workflows/bash-validation.yml/badge.svg)](https://github.com/raiyan10/maops-linux-devops-toolkit/actions/workflows/bash-validation.yml)
 ![ShellCheck](https://img.shields.io/badge/ShellCheck-enabled-4E9A06)
 ![GitHub Actions](https://img.shields.io/badge/CI-GitHub%20Actions-blue)
+![Version](https://img.shields.io/badge/version-1.0.0-success)
 ![License](https://img.shields.io/badge/License-MIT-blue)
+
+**Status: stable `v1.0.0` release.** Unified CLI, full documentation set,
+517 deterministic Bats tests, and a supply-chain-hardened CI/release
+pipeline. See [CHANGELOG.md](CHANGELOG.md) for the complete release
+history and [docs/roadmap.md](docs/roadmap.md) for what's deliberately
+still ahead.
 
 ---
 
@@ -51,136 +58,55 @@ This repository is part of the **MAOps Technologies Engineering Portfolio**.
 
 ```text
 .
-├── .claude
-│   ├── CLAUDE.md
-│   ├── agents
-│   │   ├── bash-test-engineer.md
-│   │   └── release-engineer.md
-│   ├── settings.local.json
-│   └── skills
-│       ├── bash-review
-│       ├── devops-review
-│       ├── documentation
-│       ├── github-actions
-│       ├── linux-best-practices
-│       └── new-bash-tool
-├── .github
-│   └── workflows
-│       └── bash-validation.yml
 ├── bin
-│   └── maops
+│   └── maops                       # unified CLI entry point
 ├── docs
-│   ├── architecture.md
-│   ├── best-practices.md
-│   ├── engineering-reviews
-│   │   ├── day-02.md
-│   │   ├── day-02-release-readiness.md
-│   │   ├── day-03-release-readiness.md
-│   │   └── day-03-release-readiness-followup.md
-│   ├── images
-│   │   ├── day-02
-│   │   └── day-03
-│   ├── roadmap.md
-│   └── troubleshooting.md
+│   ├── architecture.md              # system design, Mermaid diagrams
+│   ├── best-practices.md            # engineering conventions and rationale
+│   ├── compatibility.md             # supported/unsupported environments
+│   ├── demo-workflow.md             # sandboxed copy/paste walkthrough
+│   ├── install-from-release.md      # installing from a release tarball
+│   ├── portfolio-case-study.md      # engineering write-up
+│   ├── quickstart.md                # fastest path to a working install
+│   ├── roadmap.md                   # completed vs. post-v1.0 possibilities
+│   ├── troubleshooting.md           # symptom-first fixes
+│   ├── engineering-reviews/         # per-day release-readiness reviews (dev-only)
+│   └── images/                      # per-day screenshots (day-02 .. day-07)
+├── examples
+│   ├── README.md
+│   ├── config/maops.conf            # example, validated configuration
+│   └── automation/health-report.sh  # example automation script
 ├── scripts
-│   ├── common
-│   │   ├── bootstrap.sh
-│   │   ├── cli.sh
-│   │   ├── colors.sh
-│   │   ├── config.sh
-│   │   ├── config-file.sh
-│   │   ├── format.sh
-│   │   ├── helpers.sh
-│   │   ├── integrity.sh
-│   │   ├── logger.sh
-│   │   ├── output.sh
-│   │   └── release-files.sh
-│   ├── config
-│   │   └── config-manager.sh
-│   ├── diagnostics
-│   │   ├── doctor.sh
-│   │   └── integrity-check.sh
-│   ├── filesystem
-│   │   ├── cleanup-temp.sh
-│   │   ├── disk-usage.sh
-│   │   └── largest-files.sh
-│   ├── install
-│   │   ├── install.sh
-│   │   ├── lib.sh
-│   │   └── uninstall.sh
-│   ├── monitoring
-│   │   ├── cpu-monitor.sh
-│   │   ├── load-average.sh
-│   │   └── memory-report.sh
-│   ├── network
-│   │   ├── dns-lookup.sh
-│   │   ├── network-info.sh
-│   │   ├── ping-check.sh
-│   │   └── port-check.sh
-│   ├── process
-│   │   └── process-monitor.sh
-│   ├── release
-│   │   ├── package.sh
-│   │   └── verify-package.sh
-│   ├── reports
-│   │   └── operational-report.sh
-│   ├── service
-│   │   └── service-status.sh
-│   ├── system
-│   │   ├── hostname-report.sh
-│   │   ├── os-details.sh
-│   │   └── system-info.sh
-│   └── users
-│       └── user-report.sh
+│   ├── common/                      # bootstrap + shared libraries
+│   ├── config/                      # config-manager.sh
+│   ├── diagnostics/                 # doctor.sh, integrity-check.sh
+│   ├── filesystem/                  # disk-usage, largest-files, cleanup-temp
+│   ├── install/                     # install.sh, uninstall.sh
+│   ├── monitoring/                  # cpu, memory, load
+│   ├── network/                     # info, ping, dns, port
+│   ├── process/                     # process-monitor.sh
+│   ├── release/                     # package.sh, verify-package.sh, validate-documentation.sh
+│   ├── reports/                     # operational-report.sh
+│   ├── service/                     # service-status.sh
+│   ├── system/                      # system-info, os-details, hostname-report
+│   └── users/                       # user-report.sh
 ├── templates
-│   ├── github-workflow-template.yml
-│   ├── readme-template.md
-│   ├── script-template.sh
-│   └── skill-template.md
-├── tests
-│   ├── cli
-│   │   └── maops.bats
-│   ├── common
-│   │   ├── core-libraries.bats
-│   │   └── helpers.bats
-│   ├── config
-│   │   └── config-manager.bats
-│   ├── diagnostics
-│   │   ├── doctor.bats
-│   │   └── integrity-check.bats
-│   ├── filesystem
-│   │   └── filesystem-tools.bats
-│   ├── install
-│   │   └── install.bats
-│   ├── monitoring
-│   │   └── monitoring-tools.bats
-│   ├── network
-│   │   └── network-tools.bats
-│   ├── process
-│   │   └── process-monitor.bats
-│   ├── release
-│   │   └── package.bats
-│   ├── reports
-│   │   └── operational-report.bats
-│   ├── service
-│   │   └── service-status.bats
-│   ├── system
-│   │   └── system-tools.bats
-│   ├── users
-│   │   └── user-report.bats
-│   ├── workflows
-│   │   └── actions-pinning.bats
-│   └── test-helper.bash
-├── .gitattributes
-├── .gitignore
+│   └── script-template.sh           # canonical pattern for a new leaf script
+├── tests                            # one .bats file per scripts/ module (see Testing)
+├── .github/workflows/bash-validation.yml
 ├── CHANGELOG.md
 ├── CONTRIBUTING.md
 ├── LICENSE
 ├── Makefile
-└── README.md
+├── README.md
+├── SECURITY.md
+└── SUPPORT.md
 ```
 
-`dist/` (generated release artifacts from `make package`) is gitignored and intentionally not shown above.
+`dist/` (generated release artifacts from `make package`) is gitignored and
+intentionally not shown above. `.claude/` (Claude Code project guidance,
+used for development only) is likewise omitted here — see
+[CONTRIBUTING.md](CONTRIBUTING.md) for the actual development workflow.
 
 ---
 
@@ -248,6 +174,47 @@ All utilities above are also reachable through the unified [`maops` CLI](#cli-us
 ## Planned
 
 - [ ] Last Login Report (historical login history, e.g. via `last`/`lastlog` — distinct from the current-session check in `user-report.sh`)
+
+---
+
+# Architecture
+
+`bin/maops` is a thin dispatcher: it resolves its own location, sources a
+fixed-order bootstrap chain of shared common libraries, and `exec`s
+straight into the matching leaf script — so the leaf script's own exit
+code becomes the CLI's exit code, with no wrapper process in between.
+
+```mermaid
+flowchart LR
+    User(["User"]) --> Bin["bin/maops"]
+    Bin --> Dispatcher["Dispatcher"]
+    Dispatcher --> Leaf["Leaf command"]
+    Leaf --> Bootstrap["Bootstrap"]
+    Bootstrap --> Common["Common libraries"]
+    Leaf --> Local["Local Linux commands / files"]
+```
+
+See [docs/architecture.md](docs/architecture.md) for the full design,
+including the distribution/integrity-chain and configuration-precedence
+diagrams.
+
+---
+
+# Quickstart
+
+```bash
+git clone https://github.com/raiyan10/maops-linux-devops-toolkit.git
+cd maops-linux-devops-toolkit
+
+./bin/maops --version
+./bin/maops doctor
+./bin/maops report summary
+```
+
+See [docs/quickstart.md](docs/quickstart.md) for the complete walkthrough
+(install, config init, doctor, integrity, text/JSON/redacted reports,
+uninstall) and [docs/demo-workflow.md](docs/demo-workflow.md) for the same
+walkthrough fully sandboxed in a temporary `$HOME`.
 
 ---
 
@@ -391,6 +358,22 @@ Exits `0` when doctor/integrity pass and every field is collected, `1` when eith
 
 ---
 
+# Security and Privacy Model
+
+MAOps is read-only by default — the only code paths that intentionally
+write anything are `install.sh`/`uninstall.sh`, `config init`, and `report
+save`. No command ever makes a network request. `report`'s `--redact`
+flag strips hostname and configuration-path before rendering, and every
+saved report is written atomically at mode `0600`.
+
+Integrity verification (external SHA-256 + internal `MAOPS-MANIFEST.tsv`)
+proves an archive or installed tree matches what was built — it does not,
+on its own, prove who published it, since there is no cryptographic
+publisher-identity signing yet. See [SECURITY.md](SECURITY.md) for the
+full policy, scope, and how to report a suspected vulnerability.
+
+---
+
 # User, Process, and Service Utilities
 
 These three modules are strictly read-only — none of them ever starts, stops, restarts, enables, disables, kills, or renices anything, and none require `sudo`.
@@ -439,7 +422,7 @@ See [docs/architecture.md §9](docs/architecture.md#9-user-process-and-service-m
 
 # Testing
 
-The test suite uses [Bats](https://github.com/bats-core/bats-core) and requires no internet access — every network-related test either validates rejected input before any connection is attempted, or stays on loopback/`/etc/hosts`.
+The test suite uses [Bats](https://github.com/bats-core/bats-core) and requires no internet access — every network-related test either validates rejected input before any connection is attempted, or stays on loopback/`/etc/hosts`. As of v1.0.0 the suite has **517 deterministic tests** across 20 files (one per `scripts/` module), all offline and independent of the host's real state.
 
 ```bash
 make test      # run the full Bats suite
@@ -455,10 +438,28 @@ make package         # build dist/*.tar.gz and its .sha256 checksum
 make verify-package  # verify the checksum, archive-member safety, and internal manifest
 make smoke-install   # install to a temporary prefix, run the CLI + doctor + integrity, then uninstall
 make integrity       # run `maops integrity` against the source tree
+make docs-check      # offline documentation validation (scripts/release/validate-documentation.sh)
+make examples-check  # validate examples/ (config + bash -n/ShellCheck + example Bats tests)
 make release-check   # quality -> package -> verify-package -> smoke-install, in order
+make final-check     # release-check -> docs-check -> examples-check -> report-json -> integrity
 ```
 
-`make release-check` is the single command CI runs — reproduce it locally before pushing to catch anything CI would catch.
+`make final-check` is the single command CI runs on every push and pull
+request to `main` (`.github/workflows/bash-validation.yml`) — reproduce it
+locally with `make clean final-check` for a fully fresh run before pushing.
+
+---
+
+# Compatibility
+
+Actively validated: **Ubuntu (`ubuntu-latest` on GitHub Actions)** and
+**WSL2 Ubuntu** (the author's development environment). Other
+Debian/Ubuntu-family systemd distributions are expected to work but are
+not continuously tested. Alpine/BusyBox/musl and macOS/BSD are not
+supported. Bash ≥ 4 is required; Python 3 is needed only for
+release/development tooling, never for ordinary `maops` commands. See
+[docs/compatibility.md](docs/compatibility.md) for the full breakdown and
+the evidence behind each claim.
 
 ---
 
@@ -510,11 +511,50 @@ This project follows:
 - [x] Installation and packaging
 - [x] Release integrity hardening (Git-index mode normalization, internal release manifest, hardened archive verification, `maops integrity`)
 - [x] Operational report command (`maops report summary|save`, text/JSON, redaction, atomic file saving)
-- [ ] Architecture diagrams
+- [x] Architecture diagrams (Mermaid: runtime, distribution/integrity chain, config precedence)
+- [x] Final CLI-consistency audit and remaining Day 7 findings closed
+- [x] Full v1 documentation set, examples, and offline documentation validation
+- [x] v1.0.0 stable release
 - [ ] Medium technical article
 - [ ] Publisher authenticity / archive signing (see [docs/roadmap.md](docs/roadmap.md))
 
 See [docs/roadmap.md](docs/roadmap.md) for the detailed, module-level roadmap.
+
+---
+
+# Screenshots
+
+A few representative screenshots from across the project's development —
+the full per-day set lives under `docs/images/`.
+
+| CLI Help | Config (text/JSON) | Integrity Check |
+|---|---|---|
+| ![maops --help](docs/images/day-03/01-maops-cli-help.png) | ![config text/json](docs/images/day-05/01-config-text-json.png) | ![integrity text/json](docs/images/day-06/01-integrity-text-json.png) |
+
+| Operational Report | Redacted JSON Report | 443+ Passing Tests |
+|---|---|---|
+| ![operational report text](docs/images/day-07/01-operational-report-text.png) | ![redacted json report](docs/images/day-07/02-redacted-json-report.png) | ![quality tests passing](docs/images/day-07/04-quality-443-tests.png) |
+
+---
+
+# Documentation
+
+| Document | Purpose |
+|---|---|
+| [docs/quickstart.md](docs/quickstart.md) | Fastest path from a clone to a working, verified install |
+| [docs/install-from-release.md](docs/install-from-release.md) | Installing from a downloaded release tarball |
+| [docs/compatibility.md](docs/compatibility.md) | Supported, expected, and unsupported environments |
+| [docs/demo-workflow.md](docs/demo-workflow.md) | Fully sandboxed copy/paste demo |
+| [docs/portfolio-case-study.md](docs/portfolio-case-study.md) | Engineering write-up: problem, architecture, lessons |
+| [docs/architecture.md](docs/architecture.md) | System design, with Mermaid diagrams |
+| [docs/best-practices.md](docs/best-practices.md) | Engineering conventions and the rationale behind them |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | Symptom-first fixes |
+| [docs/roadmap.md](docs/roadmap.md) | Completed-in-v1.0.0 vs. post-v1.0 possibilities |
+| [examples/README.md](examples/README.md) | Example configuration and automation script |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Development environment and contribution workflow |
+| [SECURITY.md](SECURITY.md) | Vulnerability reporting and the integrity trust boundary |
+| [SUPPORT.md](SUPPORT.md) | Getting help, supported use cases and environments |
+| [CHANGELOG.md](CHANGELOG.md) | Complete release history |
 
 ---
 
@@ -546,6 +586,18 @@ This project is part of the MAOps Technologies Engineering Portfolio.
 - RAG Platform
 - AIOps
 - AI Infrastructure
+
+---
+
+# Contributing, Security, and Support
+
+- **Contributing:** see [CONTRIBUTING.md](CONTRIBUTING.md) for the
+  development environment, quality gates, and branch-naming conventions.
+- **Security:** see [SECURITY.md](SECURITY.md) to report a suspected
+  vulnerability, and for the integrity-vs-publisher-authenticity
+  trust boundary.
+- **Support:** see [SUPPORT.md](SUPPORT.md) for supported use cases,
+  tested environments, and what to include in an issue report.
 
 ---
 

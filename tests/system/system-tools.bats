@@ -20,9 +20,24 @@ setup() {
     [[ "$output" == *"Uptime"* ]]
 }
 
-@test "system-info.sh ignores unrecognized trailing arguments" {
+@test "system-info.sh rejects unrecognized trailing arguments with exit 2" {
+    # Day 8 CLI-consistency audit: system-info.sh previously had no flag
+    # handling at all (any argument was silently ignored). It now matches
+    # every other leaf script's usage-error convention.
     run "$REPO_ROOT/scripts/system/system-info.sh" --bogus
+    [ "$status" -eq 2 ]
+}
+
+@test "system-info.sh --help exits 0" {
+    run "$REPO_ROOT/scripts/system/system-info.sh" --help
     [ "$status" -eq 0 ]
+    [[ "$output" == *"Usage:"* ]]
+}
+
+@test "system-info.sh --version exits 0 and shows the current project version" {
+    run "$REPO_ROOT/scripts/system/system-info.sh" --version
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$PROJECT_VERSION"* ]]
 }
 
 @test "system-info.sh reports whatever hostname/uptime stubs return" {
@@ -87,6 +102,18 @@ STUB
     ! grep -qE 'lsb_release|/etc/shadow' "$REPO_ROOT/scripts/system/os-details.sh"
 }
 
+@test "os-details.sh --help exits 0" {
+    run "$REPO_ROOT/scripts/system/os-details.sh" --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Usage:"* ]]
+}
+
+@test "os-details.sh --version exits 0 and shows the current project version" {
+    run "$REPO_ROOT/scripts/system/os-details.sh" --version
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$PROJECT_VERSION"* ]]
+}
+
 # --- hostname-report.sh --------------------------------------------------
 
 @test "hostname-report.sh falls back to Unavailable when hostname -f fails" {
@@ -128,4 +155,16 @@ STUB
     # fallback) call -- documents actual behavior, not an idealized one.
     [ "$status" -eq 0 ]
     [[ "$output" == *"Hostname report completed."* ]]
+}
+
+@test "hostname-report.sh --help exits 0" {
+    run "$REPO_ROOT/scripts/system/hostname-report.sh" --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Usage:"* ]]
+}
+
+@test "hostname-report.sh --version exits 0 and shows the current project version" {
+    run "$REPO_ROOT/scripts/system/hostname-report.sh" --version
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$PROJECT_VERSION"* ]]
 }

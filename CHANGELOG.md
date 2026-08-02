@@ -4,6 +4,137 @@ All notable changes to the MAOps Linux DevOps Toolkit are documented here.
 
 The project follows Semantic Versioning.
 
+## [1.0.0] - 2026-08-02
+
+The first stable release. Summarizes the complete v1.0.0 product: a
+unified CLI (`bin/maops`) over Linux system and network diagnostics,
+user/process/service inspection, persistent configuration with
+CLI-argument → `MAOPS_*` env var → config-file → built-in-default
+precedence, text and JSON output throughout, `doctor` and `integrity`
+commands, operational reporting with redaction and secure atomic file
+saving, secure user-local installation and uninstall, reproducible
+packaging, two-tier (external checksum + internal manifest) archive
+integrity verification, a supply-chain-hardened CI workflow (pinned
+checkout SHA, `contents: read` only), 517 automated Bats tests, and a
+full v1 documentation and examples set.
+
+### Added
+
+- **Final CLI-consistency audit**: the nine leaf scripts that previously had
+  no `-h/--help`/`-v/--version` handling at all (`scripts/system/{system-info,os-details,hostname-report}.sh`,
+  `scripts/monitoring/{cpu-monitor,load-average,memory-report}.sh`,
+  `scripts/filesystem/{disk-usage,largest-files,cleanup-temp}.sh`) now
+  support both flags, exiting `0`, matching every other leaf script's
+  established convention. The two positional-argument scripts
+  (`largest-files.sh`, `cleanup-temp.sh`) gained only a minimal flag
+  intercept ahead of their existing `TARGET`/`LIMIT` handling, leaving
+  their established exit-1 validation behavior for bad input completely
+  unchanged. New regression test `tests/cli/leaf-script-consistency.bats`
+  covers the full remediated roster as one durable audit artifact.
+- **Resource-report portability hardening** (`scripts/common/reporting.sh`):
+  the load-average, memory, and root-filesystem collectors now validate the
+  *shape* of what they parsed from `uptime`/`free -h`/`df -hP` before
+  trusting it, instead of accepting whatever a column lookup happened to
+  return. Load average and memory additionally gain a stable-Linux fallback
+  source (`/proc/loadavg`, `/proc/meminfo`) used only when the primary
+  command's output is missing or fails its shape check — kernel-ABI text,
+  not a locale- or implementation-dependent rendering. Any field that still
+  can't be trusted degrades to `"unavailable"` exactly as before; the JSON
+  schema, field names, and the GNU/procps happy-path output are all
+  unchanged. New `MAOPS_PROC_LOADAVG`/`MAOPS_PROC_MEMINFO` test-only
+  override variables and BusyBox-shaped/malformed-output Bats fixtures
+  cover the new fallback and degradation paths (test-only — this does not
+  claim tested BusyBox support; see `docs/compatibility.md`).
+- **Remaining Day 7 Low-finding closures**: a new `docs/troubleshooting.md`
+  entry documents the accepted residual risk of a stray, mode-`0600`
+  `.maops-report.*` temp file surviving an uncatchable fatal signal
+  (`SIGKILL`/`SIGXFSZ`) during `report save` — the real destination is
+  never partially replaced, and MAOps never auto-deletes matching files.
+  New tests cover `operational-report.sh -v`/bare `version`, uppercase
+  `--format JSON` being rejected (not silently normalized), `--redact`
+  forwarding through `bin/maops`, an `--output` path containing a literal
+  embedded newline staying inert, and `maops --help` listing every stable
+  v1 command.
+- **`SECURITY.md`** and **`SUPPORT.md`**: release/support policy, how to
+  report a suspected vulnerability, the integrity-vs-publisher-authenticity
+  trust boundary, supported use cases and tested environments.
+- **User documentation**: `docs/quickstart.md`, `docs/install-from-release.md`,
+  `docs/compatibility.md`, `docs/demo-workflow.md`, and
+  `docs/portfolio-case-study.md`.
+- **`examples/`**: a validated example configuration
+  (`examples/config/maops.conf`) and a standalone automation script
+  (`examples/automation/health-report.sh`) that generates a redacted JSON
+  report, with its own deterministic Bats coverage
+  (`tests/examples/examples.bats`).
+- **Architecture diagrams** (`docs/architecture.md`, Mermaid, kept as
+  Markdown source): runtime dispatch (user → `bin/maops` → dispatcher →
+  leaf command → bootstrap → common libraries → local commands/files),
+  the distribution/integrity chain (Git index → staging →
+  `MAOPS-MANIFEST.tsv` → tar.gz → external SHA-256 → `verify-package.sh` →
+  install → `.integrity-manifest` → `maops integrity`), and configuration
+  precedence.
+- **Offline documentation validation**
+  (`scripts/release/validate-documentation.sh`,
+  `tests/release/documentation-validation.bats`): required root/user docs
+  exist, local Markdown links and referenced screenshots resolve, the
+  current version is reflected in README.md/CHANGELOG.md without falsely
+  rejecting historical version references, no known placeholder markers
+  remain in release-facing documentation, the example config/script are
+  valid, and the release package's file list includes the required v1
+  docs while excluding developer-only material. Runs entirely offline.
+- New Makefile targets `docs-check`, `examples-check`, and `final-check`
+  (`release-check` → `docs-check` → `examples-check` → `report-json` →
+  `integrity`) — the authoritative v1.0.0 stabilization gate, run via
+  `make clean final-check` for a fully fresh validation. Never publishes,
+  tags, pushes, or mutates user configuration.
+- README.md polish: stable-`v1.0.0` status, an Architecture summary with
+  the runtime-dispatch diagram, a Quickstart section, a Security and
+  Privacy Model section, a Compatibility summary, a Documentation index, a
+  Screenshots section (existing `docs/images/` screenshots only), and
+  Contributing/Security/Support links. The Repository Structure tree is
+  regenerated to match the actual v1.0.0 layout.
+
+### Changed
+
+- `scripts/common/release-files.sh`: `RELEASE_FILE_LIST` (the single source
+  of truth shared by `install.sh` and `package.sh`) extended with
+  `SECURITY.md`, `SUPPORT.md`, `docs/quickstart.md`,
+  `docs/install-from-release.md`, `docs/compatibility.md`,
+  `docs/demo-workflow.md`, and `examples/` — `docs/engineering-reviews/`,
+  `docs/images/`, and `docs/portfolio-case-study.md` (portfolio-
+  presentation material, not toolkit documentation) remain deliberately
+  excluded. `scripts/release/verify-package.sh`'s `REQUIRED_ARCHIVE_PATHS`
+  mirrors the same additions. `MAOPS-MANIFEST.tsv` generation and
+  verification required no logic changes — both are already fully
+  path-list-driven.
+- `scripts/common/config.sh`: `PROJECT_VERSION` bumped to `1.0.0`.
+- `.github/workflows/bash-validation.yml`: the single validation step now
+  runs `make final-check` instead of `make release-check`. Workflow name,
+  triggers, `contents: read`-only permissions, and the pinned checkout SHA
+  are all unchanged.
+- `docs/roadmap.md`: reorganized into "Completed in v1.0.0" and "Post-v1.0
+  possibilities" — cryptographic publisher signatures, DEB/RPM packaging,
+  shell completion, broader distribution testing, and an optional plugin
+  architecture are documented as possibilities under consideration, not
+  committed promises.
+- `docs/best-practices.md`: new §21 documenting the shared
+  race-free/mode-`0600`/atomic-rename temp-file pattern used by both
+  `config_write_atomic` and `report_save_atomic`, including the accepted
+  SIGKILL residual-risk boundary.
+
+### Fixed
+
+- `tests/release/package.bats`: the previous blanket `docs/` exclusion
+  assertion was incompatible with legitimately shipping four `docs/*.md`
+  files as of this release — replaced with precise
+  `docs/engineering-reviews/`/`docs/images/` exclusion assertions plus
+  explicit positive-presence assertions for every newly-shipped file.
+- `tests/system/system-tools.bats`: `system-info.sh --bogus` previously
+  asserted exit `0` (the pre-audit "silently ignored" behavior) — now
+  asserts exit `2`, matching the CLI-consistency audit's fix.
+
+Test count: 517 Bats tests (up from 443 at v0.6.0).
+
 ## [0.6.0] - 2026-08-01
 
 ### Added

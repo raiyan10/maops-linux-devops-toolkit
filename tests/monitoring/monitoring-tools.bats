@@ -53,6 +53,23 @@ STUB
     [[ "$output" == *"Linux"* ]]
 }
 
+@test "memory-report.sh --help exits 0" {
+    run "$REPO_ROOT/scripts/monitoring/memory-report.sh" --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Usage:"* ]]
+}
+
+@test "memory-report.sh --version exits 0 and shows the current project version" {
+    run "$REPO_ROOT/scripts/monitoring/memory-report.sh" --version
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$PROJECT_VERSION"* ]]
+}
+
+@test "memory-report.sh rejects an unrecognized argument with exit 2" {
+    run "$REPO_ROOT/scripts/monitoring/memory-report.sh" --bogus
+    [ "$status" -eq 2 ]
+}
+
 # --- cpu-monitor.sh --------------------------------------------------------
 
 @test "cpu-monitor.sh exits 0 and reproduces lscpu output verbatim" {
@@ -71,6 +88,18 @@ STUB
     run -127 "$REAL_BASH" "$REPO_ROOT/scripts/monitoring/cpu-monitor.sh"
 }
 
+@test "cpu-monitor.sh --help exits 0" {
+    run "$REPO_ROOT/scripts/monitoring/cpu-monitor.sh" --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Usage:"* ]]
+}
+
+@test "cpu-monitor.sh --version exits 0 and shows the current project version" {
+    run "$REPO_ROOT/scripts/monitoring/cpu-monitor.sh" --version
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$PROJECT_VERSION"* ]]
+}
+
 # --- load-average.sh --------------------------------------------------------
 
 @test "load-average.sh exits 0 and reproduces uptime output verbatim" {
@@ -87,6 +116,18 @@ STUB
 @test "load-average.sh fails when uptime is unavailable" {
     stub_shadow_path_except uptime
     run -127 "$REAL_BASH" "$REPO_ROOT/scripts/monitoring/load-average.sh"
+}
+
+@test "load-average.sh --help exits 0" {
+    run "$REPO_ROOT/scripts/monitoring/load-average.sh" --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Usage:"* ]]
+}
+
+@test "load-average.sh --version exits 0 and shows the current project version" {
+    run "$REPO_ROOT/scripts/monitoring/load-average.sh" --version
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$PROJECT_VERSION"* ]]
 }
 
 # --- shared safety guarantee -----------------------------------------------

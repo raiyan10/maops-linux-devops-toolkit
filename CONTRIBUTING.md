@@ -20,14 +20,19 @@ Required tools:
 `make quality` (syntax, ShellCheck, executable-mode, Bats) is the gate to
 run before every push. `make package`, `make verify-package`, `make
 smoke-install`, and `make integrity` are separate, filesystem-heavier
-release checks — not required for every commit, but chained together as
-`make release-check` and run in CI on every push and pull request. Run
-`make release-check` locally before pushing anything that touches
-`scripts/install/`, `scripts/release/`, `scripts/common/integrity.sh`,
-`scripts/diagnostics/integrity-check.sh`, `scripts/common/reporting.sh`, or
-`scripts/reports/`, to reproduce CI exactly. `make release-check` does not
-clean `dist/` between runs (fast local iteration); use `make clean
-release-check` when a fully fresh artifact directory is required.
+release checks, chained together as `make release-check`. `make docs-check`
+(offline documentation validation) and `make examples-check` (example
+config/script validation) round out `make final-check` —
+`release-check → docs-check → examples-check → report-json → integrity` —
+which is the single command CI runs on every push and pull request
+(`.github/workflows/bash-validation.yml`). Run `make final-check` locally
+before pushing anything that touches `scripts/install/`, `scripts/release/`,
+`scripts/common/integrity.sh`, `scripts/diagnostics/integrity-check.sh`,
+`scripts/common/reporting.sh`, `scripts/reports/`, `docs/`, `examples/`, or
+`SECURITY.md`/`SUPPORT.md`, to reproduce CI exactly. `final-check` does not
+clean `dist/` between runs (fast local iteration) and never publishes,
+tags, pushes, or mutates your configuration; use `make clean final-check`
+when a fully fresh, from-scratch validation is required.
 
 ## Pinned GitHub Actions
 

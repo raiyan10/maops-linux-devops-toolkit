@@ -48,6 +48,16 @@ readonly REQUIRED_ARCHIVE_PATHS=(
     "Makefile"
     "README.md"
     "CHANGELOG.md"
+    "CONTRIBUTING.md"
+    "SECURITY.md"
+    "SUPPORT.md"
+    "docs/quickstart.md"
+    "docs/install-from-release.md"
+    "docs/compatibility.md"
+    "docs/demo-workflow.md"
+    "examples/README.md"
+    "examples/config/maops.conf"
+    "examples/automation/health-report.sh"
     "MAOPS-MANIFEST.tsv"
 )
 

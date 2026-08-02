@@ -12,7 +12,7 @@ what is intentionally not built yet.
 ```text
 .
 ├── .claude              # Claude Code project guidance and Skills
-├── .github/workflows    # CI: make release-check (quality, package, verify-package, smoke-install)
+├── .github/workflows    # CI: make final-check (release-check, docs-check, examples-check, report-json, integrity)
 ├── bin                  # maops — unified CLI dispatcher
 ├── docs                 # This documentation set, plus engineering reviews
 ├── scripts
@@ -236,17 +236,19 @@ static regression test, `tests/workflows/actions-pinning.bats`, greps every
 — catching a future accidental un-pin, not just today's.
 
 The job installs `shellcheck`, `bats`, and `python3` on the `ubuntu-latest`
-runner, then runs a single command: **`make release-check`** — CI and local
+runner, then runs a single command: **`make final-check`** — CI and local
 development run the exact same command, so nothing can pass locally and
-still fail in CI (or vice versa) due to divergent logic. `make release-check`
-chains, in order: `quality` (`validate` → `lint` → `check-executable` → the
-full Bats suite), `package`, `verify-package`, and `smoke-install` (§11, §15,
-§16). `HOME` is overridden to a runner-scoped temporary directory for the
-entire `make release-check` step, so nothing in it — including the
-smoke-install's install/doctor/integrity/uninstall cycle, which itself uses
-its own `mktemp -d` prefix — can ever touch the runner's real home. None of
-these steps publish or upload anything, so no separate pull-request-vs-push
-conditional is needed.
+still fail in CI (or vice versa) due to divergent logic. `make final-check`
+chains, in order: `release-check` (itself `quality` — `validate` → `lint` →
+`check-executable` → the full Bats suite — followed by `package`,
+`verify-package`, and `smoke-install`; §11, §15, §16), `docs-check` (offline
+documentation validation, §15), `examples-check` (example config/script
+validation), `report-json`, and `integrity`. `HOME` is overridden to a
+runner-scoped temporary directory for the entire `make final-check` step, so
+nothing in it — including the smoke-install's install/doctor/integrity/
+uninstall cycle, which itself uses its own `mktemp -d` prefix — can ever
+touch the runner's real home. None of these steps publish or upload
+anything, so no separate pull-request-vs-push conditional is needed.
 
 ---
 
@@ -257,6 +259,21 @@ location via `BASH_SOURCE[0]` (working regardless of the caller's current
 directory), sources `scripts/common/bootstrap.sh` once, and then `exec`s
 straight into the appropriate leaf script — so the leaf script's own exit
 code becomes `maops`'s exit code, with no wrapper process left behind:
+
+```mermaid
+flowchart LR
+    User(["User"]) --> Bin["bin/maops"]
+    Bin --> Dispatcher["Dispatcher<br/>(dispatch_GROUP, exec-only)"]
+    Dispatcher --> Leaf["Leaf command<br/>(scripts/MODULE/*.sh)"]
+    Leaf --> Bootstrap["Bootstrap<br/>(scripts/common/bootstrap.sh)"]
+    Bootstrap --> Common["Common libraries<br/>(colors, config, helpers, logger, output, cli)"]
+    Leaf --> Local["Local Linux commands / files<br/>(awk, df, free, /proc, /etc, systemctl, ...)"]
+```
+
+Every leaf script sources the same fixed-order bootstrap chain (§3) rather
+than reimplementing logging, argument validation, or JSON assembly
+independently — the diagram's "Common libraries" box is shared state, not a
+per-command copy.
 
 **Symlink resolution.** Once installed (§11), `PREFIX/bin/maops` is a
 relative symlink to `../lib/maops/bin/maops`. A plain
@@ -542,8 +559,14 @@ PREFIX/lib/maops/.integrity-manifest
 (§15) copy from the exact same array, `scripts/common/release-files.sh`'s
 `RELEASE_FILE_LIST` (`bin/maops`, `scripts/`, `templates/script-template.sh`,
 `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `LICENSE`, `Makefile`,
-`.gitattributes`), so the installed tree and the released tarball can never
-drift apart.
+`.gitattributes`, `SECURITY.md`, `SUPPORT.md`, `docs/quickstart.md`,
+`docs/install-from-release.md`, `docs/compatibility.md`,
+`docs/demo-workflow.md`, `examples/`), so the installed tree and the
+released tarball can never drift apart. `docs/engineering-reviews/`,
+`docs/images/`, and `docs/portfolio-case-study.md` are deliberately not in
+this list — the first two are developer-only material, the third is
+portfolio-presentation content rather than toolkit documentation an
+installed copy needs.
 
 **Two install sources, two mode authorities.** `install_detect_source_mode`
 looks at `REPO_ROOT` (install.sh's own resolved location, same trick as
@@ -696,6 +719,16 @@ to be strict.
 explicit CLI argument  >  MAOPS_* environment variable  >  config file  >  built-in default
 ```
 
+```mermaid
+flowchart LR
+    A["Explicit CLI argument"] --> B["MAOPS_* environment variable"]
+    B --> C["Config file"]
+    C --> D["Built-in default"]
+```
+
+The first source in the chain that supplies a value wins; `config_resolve_value`
+never merges partial values from more than one source for the same key.
+
 Every consumer — `config show`, `doctor`, and the three leaf scripts below —
 calls this same function, so precedence logic cannot drift between call
 sites. `process-monitor.sh`'s default `LIMIT`, `ping-check.sh`'s default
@@ -779,6 +812,25 @@ always warnings.
 ---
 
 ## 15. Packaging and Release Verification
+
+```mermaid
+flowchart LR
+    GitIndex["Git index"] --> Staging["Normalized staging<br/>(modes from git ls-files -s)"]
+    Staging --> Manifest["MAOPS-MANIFEST.tsv"]
+    Manifest --> Archive["tar.gz"]
+    Archive --> Checksum["External SHA-256"]
+    Checksum --> Verify["Safe archive verification<br/>(verify-package.sh)"]
+    Verify --> Install["Installation<br/>(install.sh)"]
+    Install --> InstalledManifest[".integrity-manifest"]
+    InstalledManifest --> Integrity["maops integrity"]
+```
+
+Each arrow above is a distinct, independently-checkable step — no step
+trusts a shortcut past the one before it. `verify-package.sh` re-derives its
+own safety checks from the snapshot archive rather than trusting that
+staging or packaging behaved correctly, and `maops integrity` re-derives its
+verdict from `.integrity-manifest` rather than trusting that install-time
+verification was sufficient on its own.
 
 `scripts/release/package.sh` builds `dist/maops-linux-devops-toolkit-<version>.tar.gz`
 and a sibling `.sha256` checksum from the current git checkout:
@@ -1037,8 +1089,8 @@ like `doctor.sh`/`integrity-check.sh` (§13):
 
 ```json
 {
-  "version": "0.6.0",
-  "generated_at_utc": "2026-08-01T12:00:00Z",
+  "version": "1.0.0",
+  "generated_at_utc": "2026-08-02T12:00:00Z",
   "execution_mode": "source-tree",
   "system": {
     "hostname": "myhost",

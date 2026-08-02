@@ -5,7 +5,13 @@ Module-level detail behind the summary checklist in
 review (`docs/engineering-reviews/day-02.md`) closed out its Critical and
 High findings.
 
-## Completed
+## Completed in v1.0.0
+
+Everything below shipped by the stable v1.0.0 release: the full toolkit
+scope (system/network/user/process/service/filesystem/monitoring
+diagnostics), installation and packaging, configuration, operational
+reporting, integrity verification, CI, and the complete v1 documentation
+set.
 
 **Common library** (`scripts/common/`)
 - Bootstrap loader with fixed, dependency-correct load order
@@ -202,13 +208,62 @@ High findings.
   refusal/preservation
 - See [architecture.md §17](architecture.md#17-operational-report-maops-report)
 
-## Planned
+**Day 8 — v1.0.0 finalization**
+- Final CLI-consistency audit: the nine leaf scripts with no `--help`/
+  `--version` handling now match every other leaf script's convention; new
+  `tests/cli/leaf-script-consistency.bats`
+- Resource-report portability hardening: shape validation plus a
+  `/proc/loadavg`/`/proc/meminfo` fallback in `scripts/common/reporting.sh`,
+  with BusyBox-shaped and malformed-output test fixtures (test-only — see
+  `docs/compatibility.md` for what is and isn't actually supported)
+- Remaining Day 7 Low findings closed: the SIGKILL/`.maops-report.*`
+  residual-risk documented in `docs/troubleshooting.md` §20, plus the
+  remaining CLI-coverage tests (`-v`/bare `version`, uppercase `--format`,
+  `--redact` forwarding, embedded-newline `--output`, full `--help` command
+  listing)
+- `SECURITY.md`, `SUPPORT.md`, and the full v1 user documentation set
+  (`docs/quickstart.md`, `docs/install-from-release.md`,
+  `docs/compatibility.md`, `docs/demo-workflow.md`,
+  `docs/portfolio-case-study.md`)
+- `examples/` (validated config + automation script) with its own Bats
+  coverage
+- Architecture diagrams (Mermaid) for runtime dispatch, the
+  distribution/integrity chain, and configuration precedence
+- Offline documentation validation
+  (`scripts/release/validate-documentation.sh`) wired into new
+  `docs-check`/`examples-check`/`final-check` Makefile targets and CI
+- `RELEASE_FILE_LIST` extended to ship the new v1 docs and examples;
+  `docs/engineering-reviews/` and `docs/images/` remain excluded
+- README.md polish: stable-v1.0.0 status, architecture summary, quickstart,
+  security/privacy model, compatibility summary, documentation index,
+  screenshots, and contribution/security/support links
+- 517 total Bats tests (up from 443 at v0.6.0)
 
+## Post-v1.0 Possibilities
+
+Ideas under consideration for a future release. **None of these are
+committed promises** — they are candidates, not a roadmap in the
+scheduling sense.
+
+- **Cryptographic publisher signatures** (GPG or Sigstore) — closing the
+  publisher-authenticity gap described below and in
+  [SECURITY.md](../SECURITY.md): the existing external `.sha256` and
+  internal `MAOPS-MANIFEST.tsv` verify archive-byte and per-file integrity
+  today, not *who published* the archive
+- **Package-manager-native DEB/RPM packages** — an alternative to the
+  current tarball-based install for users who prefer their distribution's
+  native package manager
+- **Shell completion** (bash/zsh) for `bin/maops`'s command surface
+- **Broader distribution testing** — exercising the toolkit against
+  environments beyond the two actively-validated ones
+  (`docs/compatibility.md`), e.g. other systemd Debian/Ubuntu-family
+  distributions, on an ongoing basis rather than as a one-off manual check
+- **Optional plugin architecture** — a way to add new leaf commands without
+  modifying `bin/maops` directly
 - **Last-login report** — a historical login-history report (e.g. via
   `last`/`lastlog`) was considered alongside the Day 4 user module but
   deferred; the current-session report in `user-report.sh` does not cover
   historical logins
-- **Architecture diagrams** — visual complement to `docs/architecture.md`
 - **Medium technical article**
 - **Remaining template stubs** — `templates/readme-template.md`,
   `templates/skill-template.md`, and `templates/github-workflow-template.yml`
@@ -234,10 +289,3 @@ High findings.
   exercised by a long-running/adversarial fuzz-style test; a good candidate
   for a future hardening pass if the installer's manifest-verification logic
   is ever extended further
-- **Publisher authenticity / archive signing** — the external `.sha256`
-  checksum and the internal `MAOPS-MANIFEST.tsv` (see
-  [architecture.md §15](architecture.md#15-packaging-and-release-verification)
-  and [best-practices.md §20](best-practices.md#20-two-tier-archive-integrity-external-checksum-vs-internal-manifest))
-  verify archive-byte and per-file integrity today, not *who published* the
-  archive. Publisher-identity signing (e.g. GPG or Sigstore) is deferred to
-  a post-v1.0 milestone

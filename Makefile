@@ -7,7 +7,8 @@ UNINSTALL_ARGS ?=
 
 .PHONY: help validate lint check-executable quality test run cli-help \
         config-init doctor integrity report report-json install uninstall \
-        package verify-package smoke-install release-check clean
+        package verify-package smoke-install release-check docs-check \
+        examples-check final-check clean
 
 help:
 	@echo "MAOps Linux DevOps Toolkit"
@@ -31,6 +32,9 @@ help:
 	@echo "  verify-package    Verify the current release package"
 	@echo "  smoke-install     Install/verify/uninstall against a temporary prefix"
 	@echo "  release-check     Run quality, package, verify-package, smoke-install in order"
+	@echo "  docs-check        Run offline documentation validation"
+	@echo "  examples-check    Validate examples/ (config, bash -n/ShellCheck, example Bats tests)"
+	@echo "  final-check       Run release-check, docs-check, examples-check, report-json, integrity in order"
 	@echo "  clean             Remove generated temporary files and dist/"
 
 validate:
@@ -143,6 +147,40 @@ smoke-install:
 # is required (e.g. before verifying reproducibility or cutting a release).
 release-check: quality package verify-package smoke-install
 	@echo "Release check passed."
+
+docs-check:
+	@echo "Validating documentation..."
+	@./scripts/release/validate-documentation.sh
+	@echo "docs-check passed."
+
+examples-check:
+	@echo "Validating examples..."
+	@find examples -type f -name '*.sh' -print0 | xargs -0 -r -n 1 bash -n
+	@command -v shellcheck >/dev/null 2>&1 || { \
+		echo "ShellCheck is not installed."; \
+		exit 1; \
+	}
+	@find examples -type f -name '*.sh' -print0 | xargs -0 -r shellcheck
+	@./scripts/config/config-manager.sh validate examples/config/maops.conf
+	@command -v bats >/dev/null 2>&1 || { \
+		echo "Bats is not installed."; \
+		exit 1; \
+	}
+	@find tests/examples -type f -name '*.bats' -print0 | xargs -0 -r bats
+	@echo "examples-check passed."
+
+# `final-check` is the authoritative v1.0.0 stabilization gate: it extends
+# `release-check` with documentation/example validation and a final live
+# sanity pass against the actual source tree. Order matters -- release-check
+# (which builds and verifies a real package) runs first, so docs-check's
+# package-content-alignment check has something correct to check against;
+# report-json and integrity run last, against the live source tree, not the
+# packaged artifact. Never tags, pushes, publishes, or mutates user
+# configuration, and -- matching release-check's own convention -- does not
+# depend on `clean`, so dist/ is left in place between local runs. Run
+# `make clean final-check` for a fully fresh, from-scratch validation.
+final-check: release-check docs-check examples-check report-json integrity
+	@echo "Final check passed."
 
 clean:
 	@find . -type f \( -name '*.tmp' -o -name '*.log' \) -delete
